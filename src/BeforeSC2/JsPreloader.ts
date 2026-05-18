@@ -142,6 +142,7 @@ export class JsPreloader {
                     // logger.log(`ModLoader ====== JsRunner ${name} ${modName} ${stage} ok`);
                     thisWin.document.removeEventListener(`JsRunner:ok:${stage}-${modName}-${name}`, co);
                     thisWin.document.removeEventListener(`JsRunner:error:${stage}-${modName}-${name}`, ce);
+                    script.remove();
                     resolve(EV.detail.R);
                 };
                 const ce = (EV: any) => {
@@ -149,6 +150,7 @@ export class JsPreloader {
                     // logger.error(`ModLoader ====== JsRunner ${name} ${modName} ${stage} error`);
                     thisWin.document.removeEventListener(`JsRunner:ok:${stage}-${modName}-${name}`, co);
                     thisWin.document.removeEventListener(`JsRunner:error:${stage}-${modName}-${name}`, ce);
+                    script.remove();
                     reject(EV.detail.E);
                 };
                 thisWin.document.addEventListener(`JsRunner:ok:${stage}-${modName}-${name}`, co);

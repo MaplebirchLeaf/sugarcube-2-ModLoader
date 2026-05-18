@@ -1,13 +1,12 @@
 import JSZip from "jszip";
 import {every, get, has, isArray, isPlainObject, isString, uniq, isEqual} from "lodash";
-import {get as keyval_get, set as keyval_set, del as keyval_del, createStore, UseStore, setMany} from 'idb-keyval';
+import {get as keyval_get, set as keyval_set, del as keyval_del, createStore, UseStore} from 'idb-keyval';
 import {SC2DataInfo} from "./SC2DataInfoCache";
 import {checkDependenceInfo, checkModBootJsonAddonPlugin, ModBootJson, ModImgGetterDefault, ModInfo} from "./ModLoader";
 import {getLogFromModLoadControllerCallback, LogWrapper, ModLoadControllerCallback} from "./ModLoadController";
 import {extname} from "./extname";
 import {ReplacePatcher, checkPatchInfo} from "./ReplacePatcher";
 import JSON5 from 'json5';
-import uint8ToBase64 from 'uint8-to-base64';
 
 import xxHash from "xxhash-wasm";
 import {JSZipLikeReadOnlyInterface} from "./JSZipLikeReadOnlyInterface";
@@ -39,6 +38,15 @@ function base64ToUint8Array(base64: string): Uint8Array {
     }
     return bytes;
 }
+
+type ModZipData = string | Uint8Array;
+
+type IndexDBModPartsRecord = [
+    partSize: number,
+    partCount: number,
+    byteLength: number,
+    partKey: string,
+];
 
 export function Twee2Passage2(s: string): Twee2PassageR[] {
     const tweeList: Twee2PassageR[] = [];
@@ -144,16 +152,16 @@ export async function blobToBase64(blob: Blob) {
 
 export class ModZipReaderHash {
     _hash: string | undefined;
-    _zipBase64String: string | undefined;
+    _zipBase64String: ModZipData | undefined;
 
     constructor(
-        zipBase64String: string | undefined,
+        zipBase64String: ModZipData | undefined,
         hash?: string | undefined,
     ) {
         if (hash) {
             this._hash = hash;
         } else {
-            if (!zipBase64String) {
+            if (!zipBase64String || zipBase64String.length === 0) {
                 // never go there
                 console.error('[ModZipReaderHash] constructor zipBase64String is undefined if hash is undefined.');
                 throw new Error('[ModZipReaderHash] constructor zipBase64String is undefined if hash is undefined.');
@@ -162,13 +170,17 @@ export class ModZipReaderHash {
         }
     }
 
-    protected async digestMessage(message: string) {
+    protected async digestMessage(message: ModZipData) {
         // const t1 = moment();
         // const r = (await getXxHash()).h64ToString(message);
         // const t2 = moment();
         // console.log('digestMessage', r, t2.diff(t1));
         // return r;
-        return (await getXxHash()).h64ToString(message);
+        const api = await getXxHash();
+        if (isString(message)) {
+            return api.h64ToString(message);
+        }
+        return this.XxHashH64Bigint2String(api.h64Raw(message));
     }
 
     // https://github.com/jungomi/xxhash-wasm/blob/5923f26411ed763044bed17a1fec33fee74e47a0/src/xxhash.js#L148
@@ -245,7 +257,7 @@ export class ModZipReader {
 
     constructor(
         zip: JSZipLikeReadOnlyInterface,
-        zipBase64String: string,
+        zipBase64String: ModZipData,
         public loaderBase: LoaderBase,
         public modLoadControllerCallback: ModLoadControllerCallback,
     ) {
@@ -874,6 +886,7 @@ export class IndexDBLoader extends LoaderBase {
     static modDataIndexDBZipListHidden = 'modDataIndexDBZipListHidden';
     static modDataIndexDBZipList = 'modDataIndexDBZipList';
     static modDataIndexDBZipPrefix = 'modDataIndexDBZip';
+    static modDataIndexDBZipPartSize = 1024 * 1024;
 
     override init() {
         super.init();
@@ -914,24 +927,24 @@ export class IndexDBLoader extends LoaderBase {
 
         console.log('ModLoader ====== IndexDBLoader load() list', list);
 
-        // modDataBase64ZipStringList: base64[]
+        // modDataBase64ZipStringList: base64[] | Uint8Array[]
         for (const zipPath of list) {
-            const base64ZipString = await keyval_get(IndexDBLoader.calcModNameKey(zipPath), this.customStore);
-            if (!base64ZipString) {
+            const modZipData = await IndexDBLoader.getModData(zipPath, this.customStore);
+            if (!modZipData) {
                 console.error('ModLoader ====== IndexDBLoader load() cannot get zipPath:', zipPath);
                 continue;
             }
             try {
                 const mpr = new ModPackFileReaderJsZipAdaptor();
-                const modPack = await mpr.loadAsync(base64ZipString, {base64: true});
+                const modPack = await mpr.loadAsync(modZipData, {base64: isString(modZipData)});
                 if (modPack) {
-                    const m = new ModZipReader(modPack, '', this, this.log);
+                    const m = new ModZipReader(modPack, modZipData, this, this.log);
                     if (await m.init()) {
                         this.modList.push(m);
                     }
                 } else {
-                    const m = await JSZip.loadAsync(base64ZipString, {base64: true}).then(zip => {
-                        return new ModZipReader(zip, base64ZipString, this, this.log);
+                    const m = await JSZip.loadAsync(modZipData, {base64: isString(modZipData)}).then(zip => {
+                        return new ModZipReader(zip, modZipData, this, this.log);
                     });
                     if (await m.init()) {
                         this.modList.push(m);
@@ -1050,17 +1063,101 @@ export class IndexDBLoader extends LoaderBase {
         return `${this.modDataIndexDBZipPrefix}:${name}`;
     }
 
+    static calcModPartKey(name: string, partKey: string, index: number) {
+        return `${this.calcModNameKey(name)}:part:${partKey}:${index}`;
+    }
+
+    static makeModPartKey() {
+        return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+    }
+
+    static getModPartSize(byteLength: number) {
+        const baseSize = this.modDataIndexDBZipPartSize;
+        if (byteLength <= baseSize) {
+            return baseSize;
+        }
+        const maxPartCount = byteLength > 256 * baseSize ? 128 : 64;
+        const expectedSize = Math.ceil(byteLength / maxPartCount);
+        return Math.max(baseSize, Math.ceil(expectedSize / baseSize) * baseSize);
+    }
+
+    static isModPartsRecord(value: any): value is IndexDBModPartsRecord {
+        return isArray(value)
+            && value.length === 4
+            && typeof value[0] === 'number'
+            && typeof value[1] === 'number'
+            && typeof value[2] === 'number'
+            && isString(value[3]);
+    }
+
+    static async deleteModParts(name: string, record: IndexDBModPartsRecord, db = createStore(IndexDBLoader.dbName, IndexDBLoader.storeName)) {
+        const [, partCount, , partKey] = record;
+        for (let i = 0; i < partCount; i++) {
+            await keyval_del(this.calcModPartKey(name, partKey, i), db);
+        }
+    }
+
+    static async getModData(name: string, db = createStore(IndexDBLoader.dbName, IndexDBLoader.storeName)): Promise<ModZipData | undefined> {
+        const value = await keyval_get(this.calcModNameKey(name), db);
+        if (!this.isModPartsRecord(value)) {
+            return value;
+        }
+        const [, partCount, byteLength, partKey] = value;
+        const result = new Uint8Array(byteLength);
+        let offset = 0;
+        for (let i = 0; i < partCount; i++) {
+            const part = await keyval_get(this.calcModPartKey(name, partKey, i), db);
+            if (!(part instanceof Uint8Array)) {
+                console.error('ModLoader ====== IndexDBLoader getModData() part invalid:', [name, i]);
+                return undefined;
+            }
+            result.set(part, offset);
+            offset += part.length;
+        }
+        return result;
+    }
+
+    static async setModData(name: string, modData: ModZipData, db = createStore(IndexDBLoader.dbName, IndexDBLoader.storeName)) {
+        const k = this.calcModNameKey(name);
+        const oldValue = await keyval_get(k, db);
+        const modBin = isString(modData) ? base64ToUint8Array(modData) : modData;
+        const partSize = this.getModPartSize(modBin.length);
+        if (modBin.length <= partSize) {
+            await keyval_set(k, modBin, db);
+            if (this.isModPartsRecord(oldValue)) {
+                await this.deleteModParts(name, oldValue, db);
+            }
+            return;
+        }
+        const partCount = Math.ceil(modBin.length / partSize);
+        const partKey = this.makeModPartKey();
+        for (let i = 0; i < partCount; i++) {
+            const start = i * partSize;
+            const end = Math.min(start + partSize, modBin.length);
+            await keyval_set(this.calcModPartKey(name, partKey, i), modBin.slice(start, end), db);
+        }
+        const record: IndexDBModPartsRecord = [partSize, partCount, modBin.length, partKey];
+        await keyval_set(k, record, db);
+        if (this.isModPartsRecord(oldValue)) {
+            await this.deleteModParts(name, oldValue, db);
+        }
+    }
+
+    static async delModData(name: string, db = createStore(IndexDBLoader.dbName, IndexDBLoader.storeName)) {
+        const k = this.calcModNameKey(name);
+        const oldValue = await keyval_get(k, db);
+        if (this.isModPartsRecord(oldValue)) {
+            await this.deleteModParts(name, oldValue, db);
+        }
+        await keyval_del(k, db);
+    }
+
     static async addMod(name: string, modBase64String: string | Uint8Array) {
         let l = new Set(await this.listMod() || []);
-        const k = this.calcModNameKey(name);
         l.add(name);
         const db = createStore(IndexDBLoader.dbName, IndexDBLoader.storeName);
-        // const modBin = isString(modBase64String) ? uint8ToBase64.decode(modBase64String) : modBase64String;
-        const modBin = isString(modBase64String) ? base64ToUint8Array(modBase64String) : modBase64String;
-        await setMany([
-            [k, modBin],
-            [this.modDataIndexDBZipList, JSON.stringify(Array.from(l))],
-        ], db);
+        await this.setModData(name, modBase64String, db);
+        await keyval_set(this.modDataIndexDBZipList, JSON.stringify(Array.from(l)), db);
         // await keyval_set(k, modBase64String, db);
         // await keyval_set(this.modDataIndexDBZipList, JSON.stringify(Array.from(l)), db);
     }
@@ -1071,10 +1168,9 @@ export class IndexDBLoader extends LoaderBase {
         let lH = await this.loadHiddenModList() || [];
         lH = lH.filter(T => T !== name);
         const db = createStore(IndexDBLoader.dbName, IndexDBLoader.storeName);
-        const k = this.calcModNameKey(name);
         await keyval_set(this.modDataIndexDBZipList, JSON.stringify(l), db);
         await keyval_set(this.modDataIndexDBZipListHidden, JSON.stringify(lH), db);
-        await keyval_del(k, db);
+        await this.delModData(name, db);
     }
 
     // get bootJson from zip

@@ -1,4 +1,4 @@
-import {LogWrapper} from "ModLoadController";
+import {LogWrapper} from "./ModLoadController";
 import {cloneDeep, parseInt} from "lodash";
 
 export interface StyleTextFileItem {

@@ -1,5 +1,5 @@
-import {ModBootJson, ModInfo} from "ModLoader";
-import {SC2DataManager} from "SC2DataManager";
+import {ModBootJson, ModInfo} from "./ModLoader";
+import {SC2DataManager} from "./SC2DataManager";
 import JSZip from "jszip";
 import {IndexDBLoader, LocalStorageLoader} from "./ModZipReader";
 import moment from "moment/moment";

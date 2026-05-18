@@ -405,15 +405,11 @@ export class SC2DataManager {
 
         const newStyleNode = this.makeStyleNode(modSC2DataInfoCache);
 
-        // console.log('modSC2DataInfoCache.passageDataItems.items', modSC2DataInfoCache.passageDataItems.items);
-
-        const newPassageDataNode = modSC2DataInfoCache.passageDataItems.items.map(T => {
-            return this.makePassageNode(T);
-        });
+        const passageDataItems = modSC2DataInfoCache.passageDataItems.items;
 
         // console.log('patchModToGame() newScriptNode', newScriptNode);
         // console.log('patchModToGame() newStyleNode', newStyleNode);
-        // console.log('patchModToGame() newPassageDataNode', newPassageDataNode);
+        // console.log('patchModToGame() passageDataItems', passageDataItems);
 
         const rootNode = this.rootNode;
         const styleNode = this.styleNode;
@@ -434,14 +430,57 @@ export class SC2DataManager {
         // add new
         rootNode.appendChild(newScriptNode);
         rootNode.appendChild(newStyleNode);
-        for (const node of newPassageDataNode) {
-            rootNode.appendChild(node);
-        }
+        await this.appendPassageNodeSmart(rootNode, passageDataItems);
 
         // update cache
         this.flushAfterPatchCache();
 
         await this.getModLoadController().PatchModToGame_end();
+    }
+
+    getPatchModToGamePassageBatchSize(total: number) {
+        const nav = this.thisWin.navigator as Navigator & {
+            deviceMemory?: number,
+            hardwareConcurrency?: number,
+        };
+        const deviceMemory = nav.deviceMemory || 4;
+        const hardwareConcurrency = nav.hardwareConcurrency || 4;
+        if (total <= 200) {
+            return total;
+        }
+        if (deviceMemory <= 2 || hardwareConcurrency <= 4) {
+            return 50;
+        }
+        if (total >= 2000 || deviceMemory <= 4 || hardwareConcurrency <= 6) {
+            return 150;
+        }
+        return total;
+    }
+
+    async waitPatchModToGameIdle() {
+        await new Promise<void>((resolve) => {
+            const requestIdleCallback = (this.thisWin as any).requestIdleCallback;
+            if (requestIdleCallback) {
+                requestIdleCallback(() => resolve(), {timeout: 80});
+            } else {
+                this.thisWin.setTimeout(() => resolve(), 0);
+            }
+        });
+    }
+
+    async appendPassageNodeSmart(rootNode: Element, passageDataItems: PassageDataItem[]) {
+        const batchSize = this.getPatchModToGamePassageBatchSize(passageDataItems.length);
+        for (let i = 0; i < passageDataItems.length; i += batchSize) {
+            const fragment = this.thisWin.document.createDocumentFragment();
+            const end = Math.min(i + batchSize, passageDataItems.length);
+            for (let n = i; n < end; n++) {
+                fragment.appendChild(this.makePassageNode(passageDataItems[n]));
+            }
+            rootNode.appendChild(fragment);
+            if (end < passageDataItems.length) {
+                await this.waitPatchModToGameIdle();
+            }
+        }
     }
 
     makePassageNode(T: PassageDataItem) {

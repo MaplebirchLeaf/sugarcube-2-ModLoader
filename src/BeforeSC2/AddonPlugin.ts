@@ -1,7 +1,7 @@
 import {} from 'lodash';
 import {ModInfo} from "./ModLoader";
 import {ModZipReader} from "./ModZipReader";
-import {LogWrapper, ModLoadController} from 'ModLoadController';
+import {LogWrapper, ModLoadController} from './ModLoadController';
 import JSZip from 'jszip';
 import {SC2DataManager} from "./SC2DataManager";
 import {PassageTracer} from "./PassageTracer";
