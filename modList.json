@@ -1,10 +1,8 @@
 [
     "mod/ModLoaderGui/ModLoaderGui.mod.zip",
     "mod/ConflictChecker/ConflictChecker.mod.zip",
-    "mod/ImageLoaderHook/ModLoader DoL ImageLoaderHook.mod.zip",
     "mod/ModSubUiAngularJs/ModSubUiAngularJs.mod.zip",
     "mod/BeautySelectorAddon/BeautySelectorAddon.mod.zip",
-    "mod/ImageLoaderHook2BeautySelectorAddon/ImageLoaderHook2BeautySelectorAddon.mod.zip",
     "mod/CheckGameVersion/CheckGameVersion.mod.zip",
     "mod/CheckDoLCompressorDictionaries/CheckDoLCompressorDictionaries.mod.zip",
     "mod/TweeReplacerLinker/TweeReplacerLinker.mod.zip",
@@ -27,10 +25,8 @@
 
 //  "mod/ModLoaderGui/ModLoaderGui.modpack",
 //  "mod/ConflictChecker/ConflictChecker.modpack",
-//  "mod/ImageLoaderHook/ModLoader DoL ImageLoaderHook.modpack",
 //  "mod/ModSubUiAngularJs/ModSubUiAngularJs.modpack",
 //  "mod/BeautySelectorAddon/BeautySelectorAddon.modpack",
-//  "mod/ImageLoaderHook2BeautySelectorAddon/ImageLoaderHook2BeautySelectorAddon.modpack",
 //  "mod/CheckGameVersion/CheckGameVersion.modpack",
 //  "mod/CheckDoLCompressorDictionaries/CheckDoLCompressorDictionaries.modpack",
 //  "mod/TweeReplacerLinker/TweeReplacerLinker.modpack",

@@ -3,7 +3,7 @@
 	url = https://github.com/Lyoko-Jeremie/Degrees-of-Lewdity_Mod_i18nMod.git
 [submodule "mod/ModLoaderGui"]
 	path = mod/ModLoaderGui
-	url = https://github.com/Lyoko-Jeremie/sugarcube-2-ModLoaderGui.git
+	url = https://github.com/MaplebirchLeaf/sugarcube-2-ModLoaderGui.git
 	branch = master
 [submodule "mod/ImageLoaderHook"]
 	path = mod/ImageLoaderHook
@@ -67,7 +67,7 @@
 	branch = master
 [submodule "mod/BeautySelectorAddon"]
 	path = mod/BeautySelectorAddon
-	url = https://github.com/Lyoko-Jeremie/DoL_BeautySelectorAddonMod.git
+	url = https://github.com/MaplebirchLeaf/DoL_BeautySelectorAddonMod.git
 	branch = master
 [submodule "mod/I18nScriptList"]
 	path = mod/I18nScriptList
