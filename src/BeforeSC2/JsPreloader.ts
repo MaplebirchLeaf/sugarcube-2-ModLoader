@@ -122,16 +122,13 @@ export class JsPreloader {
             const script = thisWin.document.createElement('script');
 
             script.innerHTML = `(async () => {return ${content}\n})()
-        .then((R)=>{
-         console.log('ModLoader ====== JsRunner ${name} ${modName} ${stage} end');
-         document.dispatchEvent(new CustomEvent('${
-                `JsRunner:ok:${stage}-${modName}-${name}`
-            }', {"detail":{"R":R}}));})
-        .catch((e)=>{
-         console.error('ModLoader ====== JsRunner ${name} ${modName} ${stage} error',e);
-         document.dispatchEvent(new CustomEvent('${
-                `JsRunner:error:${stage}-${modName}-${name}`
-            }', {"detail":{"E":e}}));});`;
+                .then((R)=>{
+                console.log('ModLoader ====== JsRunner ${name} ${modName} ${stage} end');
+                document.dispatchEvent(new CustomEvent('${`JsRunner:ok:${stage}-${modName}-${name}`}', {"detail":{"R":R}}));})
+                .catch((e)=>{
+                console.error('ModLoader ====== JsRunner ${name} ${modName} ${stage} error',e);
+                document.dispatchEvent(new CustomEvent('${`JsRunner:error:${stage}-${modName}-${name}`}', {"detail":{"E":e}}));});
+            `;
 
             script.setAttribute('scriptName', (name));
             script.setAttribute('modName', (modName));

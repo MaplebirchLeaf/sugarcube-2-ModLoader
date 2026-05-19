@@ -27,7 +27,7 @@
 	branch = master
 [submodule "mod/Diff3WayMerge"]
 	path = mod/Diff3WayMerge
-	url = https://github.com/Lyoko-Jeremie/Mod_Diff3WayMerge.git
+	url = https://github.com/MaplebirchLeaf/Mod_Diff3WayMerge.git
 	branch = master
 [submodule "mod/ModdedClothesAddon"]
 	path = mod/ModdedClothesAddon
