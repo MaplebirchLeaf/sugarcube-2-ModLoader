@@ -431,6 +431,7 @@ export class ModLoader {
                 case ModDataLoadType.IndexDB:
                     const modIndexDBLoader = this.getIndexDBLoader();
                     try {
+                        await IndexDBLoader.syncBundledModList();
                         ok = await modIndexDBLoader.load() || ok;
                         modIndexDBLoader.modList.forEach(T => this.addModReadZip(T, ModLoadFromSourceType.IndexDB));
                     } catch (e: Error | any) {

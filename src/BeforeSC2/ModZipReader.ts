@@ -48,6 +48,11 @@ type IndexDBModPartsRecord = [
     partKey: string,
 ];
 
+type IndexDBBundledModItem = {
+    data: string,
+    hash?: string,
+};
+
 export function Twee2Passage2(s: string): Twee2PassageR[] {
     const tweeList: Twee2PassageR[] = [];
     const lines = s.split(/\r?\n/);
@@ -885,6 +890,8 @@ export class IndexDBLoader extends LoaderBase {
 
     static modDataIndexDBZipListHidden = 'modDataIndexDBZipListHidden';
     static modDataIndexDBZipList = 'modDataIndexDBZipList';
+    static modDataIndexDBZipListReadonly = 'modDataIndexDBZipListReadonly';
+    static modDataIndexDBZipBundledHash = 'modDataIndexDBZipBundledHash';
     static modDataIndexDBZipPrefix = 'modDataIndexDBZip';
     static modDataIndexDBZipPartSize = 1024 * 1024;
 
@@ -894,6 +901,8 @@ export class IndexDBLoader extends LoaderBase {
         IndexDBLoader.storeName = this.loaderKeyConfig.getLoaderKey(IndexDBLoader.storeName, IndexDBLoader.storeName);
         IndexDBLoader.modDataIndexDBZipListHidden = this.loaderKeyConfig.getLoaderKey(IndexDBLoader.modDataIndexDBZipListHidden, IndexDBLoader.modDataIndexDBZipListHidden);
         IndexDBLoader.modDataIndexDBZipList = this.loaderKeyConfig.getLoaderKey(IndexDBLoader.modDataIndexDBZipList, IndexDBLoader.modDataIndexDBZipList);
+        IndexDBLoader.modDataIndexDBZipListReadonly = this.loaderKeyConfig.getLoaderKey(IndexDBLoader.modDataIndexDBZipListReadonly, IndexDBLoader.modDataIndexDBZipListReadonly);
+        IndexDBLoader.modDataIndexDBZipBundledHash = this.loaderKeyConfig.getLoaderKey(IndexDBLoader.modDataIndexDBZipBundledHash, IndexDBLoader.modDataIndexDBZipBundledHash);
         IndexDBLoader.modDataIndexDBZipPrefix = this.loaderKeyConfig.getLoaderKey(IndexDBLoader.modDataIndexDBZipPrefix, IndexDBLoader.modDataIndexDBZipPrefix);
 
         this.customStore = createStore(IndexDBLoader.dbName, IndexDBLoader.storeName);
@@ -1013,6 +1022,85 @@ export class IndexDBLoader extends LoaderBase {
         console.log('[ModLoader] IndexDBLoader setHiddenModList() storeName', IndexDBLoader.storeName);
         await keyval_set(IndexDBLoader.modDataIndexDBZipListHidden, JSON.stringify(modeList), createStore(IndexDBLoader.dbName, IndexDBLoader.storeName));
         console.log('ModLoader ====== IndexDBLoader setHiddenModList() done');
+    }
+
+    static async setReadonlyModList(modeList: string[]) {
+        if (!isArray(modeList) || !every(modeList, isString)) {
+            console.error('ModLoader ====== IndexDBLoader setReadonlyModList() modeList type invalid. invalid');
+            return;
+        }
+        await keyval_set(IndexDBLoader.modDataIndexDBZipListReadonly, JSON.stringify(uniq(modeList)), createStore(IndexDBLoader.dbName, IndexDBLoader.storeName));
+    }
+
+    static async loadReadonlyModList() {
+        const ls = await keyval_get(IndexDBLoader.modDataIndexDBZipListReadonly, createStore(IndexDBLoader.dbName, IndexDBLoader.storeName));
+        if (!ls) return undefined;
+        try {
+            const l = JSON5.parse(ls);
+            if (Array.isArray(l) && l.every(isString)) return l;
+        } catch (e) {
+            console.error(e);
+        }
+        console.log('ModLoader ====== IndexDBLoader loadReadonlyModList() modDataIndexDBZipListReadonly Invalid');
+        return undefined;
+    }
+
+    static async loadBundledHashMap(db = createStore(IndexDBLoader.dbName, IndexDBLoader.storeName)): Promise<Record<string, string>> {
+        const value = await keyval_get(IndexDBLoader.modDataIndexDBZipBundledHash, db);
+        if (!value) return {};
+        try {
+            const record = JSON5.parse(value);
+            if (isPlainObject(record) && Object.values(record).every(isString)) {
+                return record as Record<string, string>;
+            }
+        } catch (e) {
+            console.error(e);
+        }
+        return {};
+    }
+
+    static async syncBundledModList() {
+        const bundledList = (window as any).modDataValueZipListIndexDB;
+        if (!bundledList) return;
+        if (!isArray(bundledList)) {
+            console.error('ModLoader ====== IndexDBLoader syncBundledModList() bundledList invalid.');
+            return;
+        }
+        const db = createStore(IndexDBLoader.dbName, IndexDBLoader.storeName);
+        const enabledSet = new Set(await this.listMod() || []);
+        const hiddenSet = new Set(await this.loadHiddenModList() || []);
+        const readonlySet = new Set<string>();
+        const hashMap = await this.loadBundledHashMap(db);
+
+        for (const item of bundledList) {
+            const data = isString(item) ? item : (item as IndexDBBundledModItem)?.data;
+            if (!isString(data)) {
+                console.error('ModLoader ====== IndexDBLoader syncBundledModList() item data invalid.', item);
+                continue;
+            }
+            const bootJson = await this.checkModZipFile(data).catch(e => {
+                console.error('ModLoader ====== IndexDBLoader syncBundledModList() checkModZipFile error.', e);
+                return undefined;
+            });
+            if (!bootJson || isString(bootJson)) {
+                console.error('ModLoader ====== IndexDBLoader syncBundledModList() bootJson invalid.', bootJson);
+                continue;
+            }
+            const name = bootJson.name;
+            const hash = isString((item as IndexDBBundledModItem)?.hash) ? (item as IndexDBBundledModItem).hash! : '';
+            readonlySet.add(name);
+            const oldData = await this.getModData(name, db);
+            if (!oldData || (hash && hashMap[name] !== hash)) {
+                await this.setModData(name, data, db);
+                if (hash) hashMap[name] = hash;
+            }
+            if (!enabledSet.has(name) && !hiddenSet.has(name)) enabledSet.add(name);
+        }
+
+        await keyval_set(IndexDBLoader.modDataIndexDBZipList, JSON.stringify(Array.from(enabledSet)), db);
+        await keyval_set(IndexDBLoader.modDataIndexDBZipListHidden, JSON.stringify(Array.from(hiddenSet)), db);
+        await keyval_set(IndexDBLoader.modDataIndexDBZipListReadonly, JSON.stringify(Array.from(readonlySet)), db);
+        await keyval_set(IndexDBLoader.modDataIndexDBZipBundledHash, JSON.stringify(hashMap), db);
     }
 
     static async loadHiddenModList() {
@@ -1163,6 +1251,10 @@ export class IndexDBLoader extends LoaderBase {
     }
 
     static async removeMod(name: string) {
+        if ((await this.loadReadonlyModList() || []).includes(name)) {
+            console.warn('ModLoader ====== IndexDBLoader removeMod() readonly mod cannot remove:', name);
+            return false;
+        }
         let l = await this.listMod() || [];
         l = l.filter(T => T !== name);
         let lH = await this.loadHiddenModList() || [];
@@ -1171,6 +1263,7 @@ export class IndexDBLoader extends LoaderBase {
         await keyval_set(this.modDataIndexDBZipList, JSON.stringify(l), db);
         await keyval_set(this.modDataIndexDBZipListHidden, JSON.stringify(lH), db);
         await this.delModData(name, db);
+        return true;
     }
 
     // get bootJson from zip

@@ -387,6 +387,10 @@ export class ModLoadController implements ModLoadControllerCallback {
         return await IndexDBLoader.loadHiddenModList() || [];
     }
 
+    public async loadReadonlyModList() {
+        return await IndexDBLoader.loadReadonlyModList() || [];
+    }
+
     public addModIndexDB(name: string, modBase64String: string | Uint8Array) {
         return IndexDBLoader.addMod(name, modBase64String);
     }
