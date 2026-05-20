@@ -23,11 +23,11 @@ import {has} from 'lodash';
     if (i10nPath) {
         i10nF = await promisify(fs.readFile)(i10nPath, {encoding: 'utf-8'});
         i10nNode = `
-<script id="i10n-sc2patch" type="text/javascript">
-    window.initI10n = (l10nStrings)=>{
-        ${i10nF}
-    };
-</script>
+            <script id="i10n-sc2patch" type="text/javascript">
+                window.initI10n = (l10nStrings)=>{
+                    ${i10nF}
+                };
+            </script>
         `;
     } else {
         i10nF = undefined;
