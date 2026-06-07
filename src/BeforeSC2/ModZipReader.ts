@@ -49,6 +49,7 @@ type IndexDBModPartsRecord = [
 ];
 
 type IndexDBBundledModItem = {
+    builtin?: boolean,
     name?: string,
     data?: string,
     dataParts?: string[],
@@ -1074,6 +1075,7 @@ export class IndexDBLoader extends LoaderBase {
             const hiddenSet = new Set(await this.loadHiddenModList() || []);
             const readonlySet = new Set<string>();
             const hashMap = await this.loadBundledHashMap(db);
+            const currentBundledSet = new Set<string>();
 
             for (const item of bundledList) {
                 const bundledItem = isString(item) ? undefined : item as IndexDBBundledModItem;
@@ -1086,8 +1088,10 @@ export class IndexDBLoader extends LoaderBase {
                 }
                 const maybeName = bundledItem?.name;
                 const maybeHash = bundledItem?.hash;
+                const isBuiltin = bundledItem?.builtin === true;
                 const itemName = isString(maybeName) ? maybeName : '';
                 const hash = isString(maybeHash) ? maybeHash : '';
+                if (isBuiltin && itemName) currentBundledSet.add(itemName);
 
                 if (itemName && hash && hashMap[itemName] === hash) {
                     readonlySet.add(itemName);
@@ -1136,6 +1140,15 @@ export class IndexDBLoader extends LoaderBase {
                     if (hash) hashMap[name] = hash;
                 }
                 if (!enabledSet.has(name) && !hiddenSet.has(name)) enabledSet.add(name);
+            }
+
+            for (const name of Object.keys(hashMap)) {
+                if (currentBundledSet.has(name)) continue;
+                enabledSet.delete(name);
+                hiddenSet.delete(name);
+                readonlySet.delete(name);
+                await this.delModData(name, db);
+                delete hashMap[name];
             }
 
             await keyval_set(IndexDBLoader.modDataIndexDBZipList, JSON.stringify(Array.from(enabledSet)), db);
