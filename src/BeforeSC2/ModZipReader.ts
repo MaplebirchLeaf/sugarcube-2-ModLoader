@@ -1095,7 +1095,7 @@ export class IndexDBLoader extends LoaderBase {
 
                 if (itemName && hash && hashMap[itemName] === hash) {
                     readonlySet.add(itemName);
-                    if (await this.hasModData(itemName, db)) {
+                    if (await this.getModData(itemName, db)) {
                         if (!enabledSet.has(itemName) && !hiddenSet.has(itemName)) enabledSet.add(itemName);
                         if (bundledItem?.dataParts) bundledItem.dataParts.length = 0;
                         if (bundledItem?.data) bundledItem.data = '';
@@ -1156,11 +1156,7 @@ export class IndexDBLoader extends LoaderBase {
             await keyval_set(IndexDBLoader.modDataIndexDBZipListReadonly, JSON.stringify(Array.from(readonlySet)), db);
             await keyval_set(IndexDBLoader.modDataIndexDBZipBundledHash, JSON.stringify(hashMap), db);
         } finally {
-            try {
-                delete (window as any).modDataValueZipListIndexDB;
-            } catch (e) {
-                (window as any).modDataValueZipListIndexDB = undefined;
-            }
+            delete (window as any).modDataValueZipListIndexDB;
             await new Promise(resolve => setTimeout(resolve, 0));
         }
     }
@@ -1265,11 +1261,6 @@ export class IndexDBLoader extends LoaderBase {
             offset += part.length;
         }
         return result;
-    }
-
-    static async hasModData(name: string, db = createStore(IndexDBLoader.dbName, IndexDBLoader.storeName)): Promise<boolean> {
-        const value = await keyval_get(this.calcModNameKey(name), db);
-        return value instanceof Uint8Array || this.isModPartsRecord(value) || isString(value);
     }
 
     static async setModData(name: string, modData: ModZipData, db = createStore(IndexDBLoader.dbName, IndexDBLoader.storeName)) {
