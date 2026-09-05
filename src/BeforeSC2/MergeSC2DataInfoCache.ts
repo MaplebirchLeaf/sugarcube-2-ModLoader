@@ -50,7 +50,6 @@ export function concatMergeSC2DataInfoCache(...ic: SC2DataInfo[]) {
 }
 
 export function normalMergeSC2DataInfoCache(...ic: SC2DataInfo[]) {
-    console.log('normalMergeSC2DataInfoCache', ic);
     if (ic.length === 0) {
         throw new Error('concatMergeSC2DataInfoCache (ic.length === 0)');
     }

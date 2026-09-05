@@ -1,5 +1,4 @@
 import JSZip from "jszip";
-import {every, get, has, isArray, isPlainObject, isString, uniq, isEqual} from "lodash";
 import {get as keyval_get, set as keyval_set, del as keyval_del, createStore, UseStore} from 'idb-keyval';
 import {SC2DataInfo} from "./SC2DataInfoCache";
 import {checkDependenceInfo, checkModBootJsonAddonPlugin, ModBootJson, ModImgGetterDefault, ModInfo} from "./ModLoader";
@@ -11,6 +10,12 @@ import JSON5 from 'json5';
 import xxHash from "xxhash-wasm";
 import {JSZipLikeReadOnlyInterface} from "./JSZipLikeReadOnlyInterface";
 import {ModPackFileReaderJsZipAdaptor} from "./ModPack/ModPackJsZipAdaptor";
+
+const isString = (value: unknown): value is string => typeof value === 'string';
+const isStringArray = (value: unknown): value is string[] => Array.isArray(value) && value.every(isString);
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+    typeof value === 'object' && value !== null && !Array.isArray(value);
+const hasOwn = (value: object, key: PropertyKey) => Object.prototype.hasOwnProperty.call(value, key);
 // import moment from "moment";
 
 let xxHashApi: Awaited<ReturnType<typeof xxHash>> | undefined;
@@ -18,7 +23,6 @@ let xxHashApi: Awaited<ReturnType<typeof xxHash>> | undefined;
 export async function getXxHash() {
     if (!xxHashApi) {
         xxHashApi = await xxHash();
-        console.log('xxHashApi', xxHashApi);
     }
     return xxHashApi;
 }
@@ -40,6 +44,17 @@ function base64ToUint8Array(base64: string): Uint8Array {
 }
 
 type ModZipData = string | Uint8Array;
+
+async function modBootJson(modData: ModZipData): Promise<ModBootJson | string> {
+    const options = {base64: typeof modData === 'string'};
+    const modPack = await new ModPackFileReaderJsZipAdaptor().loadAsync(modData, options);
+    const zip: JSZipLikeReadOnlyInterface = modPack ?? await JSZip.loadAsync(modData, options);
+    const bootJsonFile = zip.file(ModZipReader.modBootFilePath);
+    if (!bootJsonFile) return `bootJsonFile ${ModZipReader.modBootFilePath} Invalid`;
+
+    const bootJson = JSON5.parse(await bootJsonFile.async('string'));
+    return ModZipReader.validateBootJson(bootJson) ? bootJson : 'bootJson Invalid';
+}
 
 type IndexDBModPartsRecord = [
     partSize: number,
@@ -93,7 +108,7 @@ export function Twee2Passage2(s: string): Twee2PassageR[] {
             }
 
             if (lastTwee) {
-                lastTwee.content = lines.slice(lastStartLine + 1, i + 1).join('\n');
+                lastTwee.content = lines.slice(lastStartLine + 1, i).join('\n');
                 tweeList.push(lastTwee);
             }
             lastTwee = nextTwee;
@@ -185,7 +200,7 @@ export class ModZipReaderHash {
         // console.log('digestMessage', r, t2.diff(t1));
         // return r;
         const api = await getXxHash();
-        if (isString(message)) {
+        if (typeof message === 'string') {
             return api.h64ToString(message);
         }
         return this.XxHashH64Bigint2String(api.h64Raw(message));
@@ -215,12 +230,12 @@ export class ModZipReaderHash {
     }
 
     compare(h: ModZipReaderHash) {
-        return isEqual(this._hash, h._hash);
+        return this._hash === h._hash;
     }
 
     compareWithString(h: string) {
         try {
-            return isEqual(this._hash, this.fromString(h));
+            return this._hash === this.fromString(h);
         } catch (e) {
             return false;
         }
@@ -235,8 +250,8 @@ export class ModZipReaderHash {
         return this._hash;
     }
 
-    fromString(hash: string): (typeof this._hash) {
-        return this._hash;
+    fromString(hash: string): string {
+        return hash;
     }
 
 }
@@ -334,105 +349,75 @@ export class ModZipReader {
         return !this._zip;
     }
 
-    static validateBootJson(bootJ: any, log?: LogWrapper): bootJ is ModBootJson {
-        let c = bootJ
-            && isString(get(bootJ, 'name'))
-            && get(bootJ, 'name').length > 0
-            && isString(get(bootJ, 'version'))
-            && get(bootJ, 'version').length > 0
-            && isArray(get(bootJ, 'styleFileList'))
-            && every(get(bootJ, 'styleFileList'), isString)
-            && isArray(get(bootJ, 'scriptFileList'))
-            && every(get(bootJ, 'scriptFileList'), isString)
-            && isArray(get(bootJ, 'tweeFileList'))
-            && every(get(bootJ, 'tweeFileList'), isString)
-            && isArray(get(bootJ, 'imgFileList'))
-            && every(get(bootJ, 'imgFileList'), isString);
-
-        // optional
-        if (c && has(bootJ, 'nickName')) {
-            c = c && (isString(get(bootJ, 'nickName')) || (isPlainObject(get(bootJ, 'nickName'))));
-        }
-        if (c && has(bootJ, 'alias')) {
-            c = c && (isArray(get(bootJ, 'alias')) && every(get(bootJ, 'alias'), isString));
-        }
-        if (c && has(bootJ, 'dependenceInfo')) {
-            c = c && (isArray(get(bootJ, 'dependenceInfo')) && every(get(bootJ, 'dependenceInfo'), checkDependenceInfo));
-        }
-        if (c && has(bootJ, 'addonPlugin')) {
-            c = c && (isArray(get(bootJ, 'addonPlugin')) && every(get(bootJ, 'addonPlugin'), checkModBootJsonAddonPlugin));
-        }
-        if (c && has(bootJ, 'replacePatchList')) {
-            c = c && (isArray(get(bootJ, 'replacePatchList')) && every(get(bootJ, 'replacePatchList'), isString));
-        }
-        if (c && has(bootJ, 'scriptFileList_preload')) {
-            c = c && (isArray(get(bootJ, 'scriptFileList_preload')) && every(get(bootJ, 'scriptFileList_preload'), isString));
-        }
-        if (c && has(bootJ, 'scriptFileList_earlyload')) {
-            c = c && (isArray(get(bootJ, 'scriptFileList_earlyload')) && every(get(bootJ, 'scriptFileList_earlyload'), isString));
-        }
-        if (c && has(bootJ, 'scriptFileList_inject_early')) {
-            c = c && (isArray(get(bootJ, 'scriptFileList_inject_early')) && every(get(bootJ, 'scriptFileList_inject_early'), isString));
+    static validateBootJson(bootJ: unknown, log?: LogWrapper): bootJ is ModBootJson {
+        if (!isPlainObject(bootJ)) {
+            log?.error('validateBootJson failed: boot.json must be an object');
+            return false;
         }
 
-        if (!c && log) {
-            log.error('validateBootJson(bootJ) failed. ' + JSON.stringify([
-                isString(get(bootJ, 'name')),
-                get(bootJ, 'name').length > 0,
-                isString(get(bootJ, 'version')),
-                get(bootJ, 'version').length > 0,
-                isArray(get(bootJ, 'styleFileList')),
-                every(get(bootJ, 'styleFileList'), isString),
-                isArray(get(bootJ, 'scriptFileList')),
-                every(get(bootJ, 'scriptFileList'), isString),
-                isArray(get(bootJ, 'tweeFileList')),
-                every(get(bootJ, 'tweeFileList'), isString),
-                isArray(get(bootJ, 'imgFileList')),
-                every(get(bootJ, 'imgFileList'), isString),
+        const checks: Record<string, boolean> = {
+            name: isString(bootJ.name) && bootJ.name.length > 0,
+            version: isString(bootJ.version) && bootJ.version.length > 0,
+            styleFileList: isStringArray(bootJ.styleFileList),
+            scriptFileList: isStringArray(bootJ.scriptFileList),
+            tweeFileList: isStringArray(bootJ.tweeFileList),
+            imgFileList: isStringArray(bootJ.imgFileList),
+        };
 
-                // 'nickName',
-                // has(bootJ, 'nickName') ? isString(get(bootJ, 'nickName')) : true,
+        const optional = (key: string, validate: (value: unknown) => boolean) =>
+            !hasOwn(bootJ, key) || validate(bootJ[key]);
 
-                'alias',
-                has(bootJ, 'alias') &&
-                isArray(get(bootJ, 'alias')) ? every(get(bootJ, 'alias'), checkDependenceInfo) : true,
+        checks.nickName = optional('nickName', value => isString(value) || isPlainObject(value));
+        checks.alias = optional('alias', isStringArray);
+        checks.dependenceInfo = optional('dependenceInfo', value =>
+            Array.isArray(value) && value.every(checkDependenceInfo));
+        checks.addonPlugin = optional('addonPlugin', value =>
+            Array.isArray(value) && value.every(checkModBootJsonAddonPlugin));
+        checks.replacePatchList = optional('replacePatchList', isStringArray);
+        checks.scriptFileList_preload = optional('scriptFileList_preload', isStringArray);
+        checks.scriptFileList_earlyload = optional('scriptFileList_earlyload', isStringArray);
+        checks.scriptFileList_inject_early = optional('scriptFileList_inject_early', isStringArray);
 
-                'dependenceInfo',
-                has(bootJ, 'dependenceInfo') &&
-                isArray(get(bootJ, 'dependenceInfo')) ? every(get(bootJ, 'dependenceInfo'), checkDependenceInfo) : true,
+        const invalidFields = Object.entries(checks)
+            .filter(([, valid]) => !valid)
+            .map(([field]) => field);
 
-                'addonPlugin',
-                has(bootJ, 'addonPlugin') &&
-                isArray(get(bootJ, 'addonPlugin')) ? every(get(bootJ, 'addonPlugin'), checkModBootJsonAddonPlugin) : true,
-
-                'replacePatchList',
-                has(bootJ, 'replacePatchList') &&
-                isArray(get(bootJ, 'replacePatchList')) ? every(get(bootJ, 'replacePatchList'), isString) : true,
-
-                'scriptFileList_preload',
-                has(bootJ, 'scriptFileList_preload') &&
-                isArray(get(bootJ, 'scriptFileList_preload')) ? every(get(bootJ, 'scriptFileList_preload'), isString) : true,
-
-                'scriptFileList_earlyload',
-                has(bootJ, 'scriptFileList_earlyload') &&
-                isArray(get(bootJ, 'scriptFileList_earlyload')) ? every(get(bootJ, 'scriptFileList_earlyload'), isString) : true,
-
-                'scriptFileList_inject_early',
-                has(bootJ, 'scriptFileList_inject_early') &&
-                isArray(get(bootJ, 'scriptFileList_inject_early')) ? every(get(bootJ, 'scriptFileList_inject_early'), isString) : true,
-            ]));
+        if (invalidFields.length > 0) {
+            log?.error(`validateBootJson failed: ${invalidFields.join(', ')}`);
+            return false;
         }
-
-        return c;
+        return true;
     }
 
     static modBootFilePath = 'boot.json';
 
-    // replaceImgWithBase64String(s: string) {
-    //     this.modInfo?.imgs.forEach(T => {
-    //         s = s.replace(T.path, T.data);
-    //     });
-    // }
+    private reportMissingFile(kind: string, path: string, level: 'warn' | 'error' = 'warn') {
+        const message = `cannot get ${kind} file from mod zip: [${this.modInfo?.name ?? 'unknown'}] [${path}]`;
+        console[level](message);
+        this.log[level](message);
+    }
+
+    private async readTextFile(path: string, kind: string, level: 'warn' | 'error' = 'warn') {
+        const file = this.zip.file(path);
+        if (!file) {
+            this.reportMissingFile(kind, path, level);
+            return undefined;
+        }
+        return file.async('string');
+    }
+
+    private async loadScriptFiles(
+        paths: string[] | undefined,
+        target: Array<[string, string]>,
+        kind: string,
+    ) {
+        for (const path of paths ?? []) {
+            const data = await this.readTextFile(path, kind);
+            if (data !== undefined) target.push([path, data]);
+        }
+    }
+
+
 
     async init() {
         await this.modZipReaderHash.init();
@@ -441,27 +426,8 @@ export class ModZipReader {
             console.log('ModLoader ====== ModZipReader init() cannot find :', ModZipReader.modBootFilePath);
             return false;
         }
-        const bootJson = await bootJsonFile.async('string')
+        const bootJson = await bootJsonFile.async('string');
         const bootJ = JSON5.parse(bootJson);
-        // console.log('ModZipReader init() bootJ', bootJ);
-        // console.log('ModZipReader init() bootJ', this.validateBootJson(bootJ));
-        // console.log('ModZipReader init() bootJ', [
-        //     bootJ
-        //     , isString(get(bootJ, 'name'))
-        //     , get(bootJ, 'name').length > 0
-        //     , isString(get(bootJ, 'version'))
-        //     , get(bootJ, 'version').length > 0
-        //     , isArray(get(bootJ, 'styleFileList'))
-        //     , every(get(bootJ, 'styleFileList'), isString)
-        //     , isArray(get(bootJ, 'scriptFileList'))
-        //     , every(get(bootJ, 'scriptFileList'), isString)
-        //     , isArray(get(bootJ, 'tweeFileList'))
-        //     , every(get(bootJ, 'tweeFileList'), isString)
-        //     , isArray(get(bootJ, 'imgFileList'))
-        //     , every(get(bootJ, 'imgFileList'), isString)
-        //     , isArray(get(bootJ, 'imgFileReplaceList'))
-        //     , every(get(bootJ, 'imgFileReplaceList'), T => isArray(T) && T.length === 2 && isString(T[0]) && isString(T[1]))
-        // ]);
         if (ModZipReader.validateBootJson(bootJ, this.log)) {
             this.modInfo = {
                 name: bootJ.name,
@@ -484,19 +450,6 @@ export class ModZipReader {
             this.loaderBase.addZipFile(bootJ.name, this);
             // console.log('ModLoader ====== ModZipReader init() modInfo', this.modInfo);
 
-            // load file
-            // for (const imgRPath of bootJ.imgFileReplaceList) {
-            //     const imgFile = this.zip.file(imgRPath[1]);
-            //     if (imgFile) {
-            //         const data = await imgFile.async('string');
-            //         this.modInfo.imgFileReplaceList.push([
-            //             imgRPath[0],
-            //             data,
-            //         ]);
-            //     } else {
-            //         console.warn('cannot get imgFileReplaceList file from mod zip:', [this.modInfo.name, imgFile])
-            //     }
-            // }
             for (const replacePatchPath of bootJ.replacePatchList || []) {
                 const replacePatchFile = this.zip.file(replacePatchPath);
                 if (replacePatchFile) {
@@ -519,8 +472,7 @@ export class ModZipReader {
                         this.log.error(`ModLoader ====== ModZipReader init() replacePatchFile Invalid: [${this.modInfo.name}] [${replacePatchPath}]`);
                     }
                 } else {
-                    console.warn('cannot get replacePatchFile file from mod zip:', [this.modInfo.name, replacePatchFile]);
-                    this.log.warn(`cannot get replacePatchFile file from mod zip: [${this.modInfo.name}] [${replacePatchFile}]`);
+                    this.reportMissingFile('replacePatchFile', replacePatchPath);
                 }
             }
             for (const imgPath of bootJ.imgFileList || []) {
@@ -532,51 +484,15 @@ export class ModZipReader {
                         path: imgPath,
                     });
                 } else {
-                    console.error('cannot get imgFileList file from mod zip:', [this.modInfo.name, imgPath]);
-                    this.log.error(`cannot get imgFileList file from mod zip: [${this.modInfo.name}] [${imgPath}]`);
+                    this.reportMissingFile('imgFileList', imgPath, 'error');
                 }
             }
             await this.constructModInfoCache(bootJ, false);
 
-            // optional
-            if (has(bootJ, 'scriptFileList_preload')) {
-                for (const scPath of bootJ.scriptFileList_preload!) {
-                    const scFile = this.zip.file(scPath);
-                    if (scFile) {
-                        const data = await scFile.async('string');
-                        this.modInfo.scriptFileList_preload.push([scPath, data]);
-                    } else {
-                        console.warn('cannot get scriptFileList_preload file from mod zip:', [this.modInfo.name, scPath]);
-                        this.log.warn(`cannot get scriptFileList_preload file from mod zip: [${this.modInfo.name}] [${scPath}]`);
-                    }
-                }
-            }
-            if (has(bootJ, 'scriptFileList_earlyload')) {
-                for (const scPath of bootJ.scriptFileList_earlyload!) {
-                    const scFile = this.zip.file(scPath);
-                    if (scFile) {
-                        const data = await scFile.async('string');
-                        this.modInfo.scriptFileList_earlyload.push([scPath, data]);
-                    } else {
-                        console.warn('cannot get scriptFileList_earlyload file from mod zip:', [this.modInfo.name, scPath]);
-                        this.log.warn(`cannot get scriptFileList_earlyload file from mod zip: [${this.modInfo.name}] [${scPath}]`);
-                    }
-                }
-            }
-            if (has(bootJ, 'scriptFileList_inject_early')) {
-                for (const scPath of bootJ.scriptFileList_inject_early!) {
-                    const scFile = this.zip.file(scPath);
-                    if (scFile) {
-                        const data = await scFile.async('string');
-                        this.modInfo.scriptFileList_inject_early.push([scPath, data]);
-                    } else {
-                        console.warn('cannot get scriptFileList_earlyload file from mod zip:', [this.modInfo.name, scPath]);
-                        this.log.warn(`cannot get scriptFileList_earlyload file from mod zip: [${this.modInfo.name}] [${scPath}]`);
-                    }
-                }
-            }
+            await this.loadScriptFiles(bootJ.scriptFileList_preload, this.modInfo.scriptFileList_preload, 'scriptFileList_preload');
+            await this.loadScriptFiles(bootJ.scriptFileList_earlyload, this.modInfo.scriptFileList_earlyload, 'scriptFileList_earlyload');
+            await this.loadScriptFiles(bootJ.scriptFileList_inject_early, this.modInfo.scriptFileList_inject_early, 'scriptFileList_inject_early');
 
-            console.log('ModLoader ====== ModZipReader init() modInfo', this.modInfo, this.modZipReaderHash._hash);
             this.log.log(`ModLoader ====== ModZipReader init() modInfo: [${this.modInfo.name}] [${this.modInfo.version}]`);
 
             return true;
@@ -594,20 +510,14 @@ export class ModZipReader {
         if (!keepOld) {
             this.modInfo.cache.styleFileItems.items = [];
         }
-        for (const stylePath of styleFileList || []) {
-            const styleFile = this.zip.file(stylePath);
-            if (styleFile) {
-                const data = await styleFile.async('string');
-                // this.replaceImgWithBase64String(data);
-                this.modInfo.cache.styleFileItems.items.push({
-                    name: stylePath,
-                    content: data,
-                    id: 0,
-                });
-            } else {
-                console.warn('cannot get styleFileList file from mod zip:', [this.modInfo.name, stylePath]);
-                this.log.warn(`cannot get styleFileList file from mod zip: [${this.modInfo.name}] [${stylePath}]`);
-            }
+        for (const stylePath of styleFileList) {
+            const data = await this.readTextFile(stylePath, 'styleFileList');
+            if (data === undefined) continue;
+            this.modInfo.cache.styleFileItems.items.push({
+                name: stylePath,
+                content: data,
+                id: 0,
+            });
         }
         this.modInfo.cache.styleFileItems.fillMap();
     }
@@ -622,37 +532,16 @@ export class ModZipReader {
         if (!keepOld) {
             this.modInfo.cache.passageDataItems.items = [];
         }
-        for (const tweePath of tweeFileList || []) {
-            const imgFile = this.zip.file(tweePath);
-            if (imgFile) {
-                const data = await imgFile.async('string');
-                const tp = Twee2Passage(data);
-                // console.log('Twee2Passage', tp, [data]);
-                for (const p of tp) {
-                    // this.replaceImgWithBase64String(p.contect);
-                    this.modInfo.cache.passageDataItems.items.push({
-                        name: p.name,
-                        content: p.content,
-                        id: 0,
-                        tags: p.tags,
-                    });
-                }
-
-
-                // {
-                //     // <<widget "variablesStart2">>
-                //     const isWidget = /<<widget\W+"([^ "]+)"\W*>>/.test(data);
-                //     this.replaceImgWithBase64String(data);
-                //     this.modInfo.cache.passageDataItems.items.push({
-                //         name: tweePath,
-                //         content: data,
-                //         id: 0,
-                //         tags: isWidget ? ['widget'] : [],
-                //     });
-                // }
-            } else {
-                console.error('cannot get tweeFileList file from mod zip:', [this.modInfo.name, tweePath]);
-                this.log.error(`cannot get tweeFileList file from mod zip: [${this.modInfo.name}] [${tweePath}]`);
+        for (const tweePath of tweeFileList) {
+            const data = await this.readTextFile(tweePath, 'tweeFileList', 'error');
+            if (data === undefined) continue;
+            for (const passage of Twee2Passage(data)) {
+                this.modInfo.cache.passageDataItems.items.push({
+                    name: passage.name,
+                    content: passage.content,
+                    id: 0,
+                    tags: passage.tags,
+                });
             }
         }
         this.modInfo.cache.passageDataItems.fillMap();
@@ -669,34 +558,30 @@ export class ModZipReader {
         if (!keepOld) {
             this.modInfo.cache.scriptFileItems.items = [];
         }
-        for (const scPath of scriptFileList || []) {
-            const scFile = this.zip.file(scPath);
-            if (scFile) {
-                const data = await scFile.async('string');
-                // this.replaceImgWithBase64String(data);
-                this.modInfo.cache.scriptFileItems.items.push({
-                    name: scPath,
-                    content: data,
-                    id: 0,
-                });
-            } else {
-                console.error('cannot get scriptFileList file from mod zip:', [this.modInfo.name, scPath]);
-                this.log.error(`cannot get scriptFileList file from mod zip: [${this.modInfo.name}] [${scPath}]`);
-            }
+        for (const scPath of scriptFileList) {
+            const data = await this.readTextFile(scPath, 'scriptFileList', 'error');
+            if (data === undefined) continue;
+            this.modInfo.cache.scriptFileItems.items.push({
+                name: scPath,
+                content: data,
+                id: 0,
+            });
         }
         this.modInfo.cache.scriptFileItems.fillMap();
     }
 
     async constructModInfoCache(bootJ: ModBootJson, keepOld: boolean) {
         if (!this.modInfo) {
-            console.error('ModLoader ====== ModZipReader constructModeInfoCache() (!this.modInfo).', [this.modInfo]);
-            this.log.error(`ModLoader ====== ModZipReader constructModeInfoCache() (!this.modInfo).`);
+            console.error('ModLoader ====== ModZipReader constructModInfoCache() (!this.modInfo).', [this.modInfo]);
+            this.log.error(`ModLoader ====== ModZipReader constructModInfoCache() (!this.modInfo).`);
             return;
         }
 
-        await this.refillCacheStyleFileItems(bootJ.styleFileList, keepOld);
-        await this.refillCachePassageDataItems(bootJ.tweeFileList, keepOld);
-        await this.refillCacheScriptFileItems(bootJ.scriptFileList, keepOld);
+        await Promise.all([
+            this.refillCacheStyleFileItems(bootJ.styleFileList, keepOld),
+            this.refillCachePassageDataItems(bootJ.tweeFileList, keepOld),
+            this.refillCacheScriptFileItems(bootJ.scriptFileList, keepOld),
+        ]);
 
     }
 }
@@ -742,6 +627,32 @@ export class LoaderBase {
         this.modZipList.set(name, [zip]);
     }
 
+    protected async initZipReader(
+        zipSource: string | Uint8Array | Blob,
+        options?: {base64?: boolean},
+    ): Promise<ModZipReader | undefined> {
+        try {
+            const modPack = await new ModPackFileReaderJsZipAdaptor().loadAsync(zipSource, options);
+            const zip: JSZipLikeReadOnlyInterface = modPack ?? await JSZip.loadAsync(zipSource, options);
+
+            let hashSource: ModZipData = '';
+            if (!zip.hashString) {
+                hashSource = zipSource instanceof Blob
+                    ? new Uint8Array(await zipSource.arrayBuffer())
+                    : zipSource;
+            }
+
+            const reader = new ModZipReader(zip, hashSource, this, this.log);
+            if (!await reader.init()) return undefined;
+
+            this.modList.push(reader);
+            return reader;
+        } catch (error) {
+            console.error(error);
+            return undefined;
+        }
+    }
+
     async load(): Promise<boolean> {
         throw new Error('LoaderBase load() not implement');
     }
@@ -762,21 +673,19 @@ export class LocalStorageLoader extends LoaderBase {
 
         const listFile = localStorage.getItem(LocalStorageLoader.modDataLocalStorageZipList);
         if (!listFile) {
-            return Promise.resolve(false);
+            return false;
         }
         let list: string[];
         try {
             list = JSON5.parse(listFile);
         } catch (e) {
             console.error(e);
-            return Promise.resolve(false);
+            return false;
         }
-        if (!(isArray(list) && list.every(isString))) {
-            return Promise.resolve(false);
+        if (!isStringArray(list)) {
+            return false;
         }
 
-        console.log('ModLoader ====== LocalStorageLoader load() list', list);
-        // this.logger.log('ModLoader ====== LocalStorageLoader load() list');
 
         // modDataBase64ZipStringList: base64[]
         for (const zipPath of list) {
@@ -786,28 +695,10 @@ export class LocalStorageLoader extends LoaderBase {
                 // this.logger.error(`ModLoader ====== LocalStorageLoader load() cannot get zipPath:[${zipPath}]`);
                 continue;
             }
-            try {
-                const mpr = new ModPackFileReaderJsZipAdaptor();
-                const modPack = await mpr.loadAsync(base64ZipString, {base64: true});
-                if (modPack) {
-                    const m = new ModZipReader(modPack, '', this, this.log);
-                    if (await m.init()) {
-                        this.modList.push(m);
-                    }
-                } else {
-                    const m = await JSZip.loadAsync(base64ZipString, {base64: true}).then(zip => {
-                        return new ModZipReader(zip, base64ZipString, this, this.log);
-                    });
-                    if (await m.init()) {
-                        this.modList.push(m);
-                    }
-                }
-            } catch (E) {
-                console.error(E);
-            }
+            await this.initZipReader(base64ZipString, {base64: true});
         }
 
-        return Promise.resolve(true);
+        return true;
     }
 
     static listMod() {
@@ -819,7 +710,7 @@ export class LocalStorageLoader extends LoaderBase {
         try {
             const l = JSON5.parse(ls);
             console.log('ModLoader ====== LocalStorageLoader listMod() modDataLocalStorageZipList', l);
-            if (Array.isArray(l) && l.every(isString)) {
+            if (isStringArray(l)) {
                 return l;
             }
         } catch (e) {
@@ -833,14 +724,6 @@ export class LocalStorageLoader extends LoaderBase {
         return `${this.modDataLocalStorageZipPrefix}:${name}`;
     }
 
-    static addMod(name: string, modBase64String: string) {
-        let l = new Set(this.listMod() || []);
-        const k = this.calcModNameKey(name);
-        l.add(name);
-        localStorage.setItem(k, modBase64String);
-        localStorage.setItem(this.modDataLocalStorageZipList, JSON.stringify(Array.from(l)));
-    }
-
     static removeMod(name: string) {
         let l = this.listMod() || [];
         l = l.filter(T => T !== name);
@@ -851,30 +734,15 @@ export class LocalStorageLoader extends LoaderBase {
 
     // get bootJson from zip
     static async checkModZipFile(modBase64String: string) {
-        try {
-            const mpr = new ModPackFileReaderJsZipAdaptor();
-            const modPack = await mpr.loadAsync(modBase64String, {base64: true});
-            let zip: JSZipLikeReadOnlyInterface;
-            if (modPack) {
-                zip = modPack;
-            } else {
-                zip = await JSZip.loadAsync(modBase64String, {base64: true});
-            }
-            const bootJsonFile = zip.file(ModZipReader.modBootFilePath);
-            if (!bootJsonFile) {
-                console.log('ModLoader ====== LocalStorageLoader checkModeZipFile() cannot find bootJsonFile:', ModZipReader.modBootFilePath);
-                return `bootJsonFile ${ModZipReader.modBootFilePath} Invalid`;
-            }
-            const bootJson = await bootJsonFile.async('string')
-            const bootJ = JSON5.parse(bootJson);
-            if (ModZipReader.validateBootJson(bootJ)) {
-                return bootJ;
-            }
-            return `bootJson Invalid`;
-        } catch (E: any) {
-            console.error('checkModZipFile', E);
-            return Promise.reject(E);
-        }
+        return modBootJson(modBase64String);
+    }
+
+    static addMod(name: string, modBase64String: string) {
+        const l = new Set(this.listMod() || []);
+        const k = this.calcModNameKey(name);
+        l.add(name);
+        localStorage.setItem(k, modBase64String);
+        localStorage.setItem(this.modDataLocalStorageZipList, JSON.stringify(Array.from(l)));
     }
 
     setConfigKey(
@@ -886,29 +754,66 @@ export class LocalStorageLoader extends LoaderBase {
     }
 }
 
+async function loadStringList(key: string, db = createStore(IndexDBLoader.K.dbName, IndexDBLoader.K.storeName)): Promise<string[] | undefined> {
+    const raw = await keyval_get(key, db);
+    if (!raw) return undefined;
+    try {
+        const value = JSON5.parse(raw);
+        if (isStringArray(value)) return value;
+    } catch (e) {
+        console.error(e);
+    }
+    return undefined;
+}
+
+async function saveStringList(key: string, modeList: string[], db = createStore(IndexDBLoader.K.dbName, IndexDBLoader.K.storeName)): Promise<void> {
+    if (!isStringArray(modeList)) {
+        console.error('ModLoader ====== IndexDBLoader saveStringList() modeList type invalid.');
+        return;
+    }
+    await keyval_set(key, JSON.stringify([...new Set(modeList)]), db);
+}
+
+async function loadStringRecord(key: string, db = createStore(IndexDBLoader.K.dbName, IndexDBLoader.K.storeName)): Promise<Record<string, string>> {
+    const raw = await keyval_get(key, db);
+    if (!raw) return {};
+    try {
+        const record = JSON5.parse(raw);
+        if (isPlainObject(record) && Object.values(record).every(isString)) {
+            return record as Record<string, string>;
+        }
+    } catch (e) {
+        console.error(e);
+    }
+    return {};
+}
+
+
 export class IndexDBLoader extends LoaderBase {
 
-    static dbName: string = 'ModLoader_IndexDBLoader';
-    static storeName: string = 'ModLoader_IndexDBLoader';
+    /** All IndexedDB keys/options, renamed via LoaderKeyConfig in init(). */
+    static K = {
+        dbName: 'ModLoader_IndexDBLoader',
+        storeName: 'ModLoader_IndexDBLoader',
+        list: 'modDataIndexDBZipList',
+        hidden: 'modDataIndexDBZipListHidden',
+        readonly: 'modDataIndexDBZipListReadonly',
+        pinned: 'modDataIndexDBZipPinned',
+        bundledHash: 'modDataIndexDBZipBundledHash',
+        prefix: 'modDataIndexDBZip',
+        partSize: 1024 * 1024,
+    };
 
-    static modDataIndexDBZipListHidden = 'modDataIndexDBZipListHidden';
-    static modDataIndexDBZipList = 'modDataIndexDBZipList';
-    static modDataIndexDBZipListReadonly = 'modDataIndexDBZipListReadonly';
-    static modDataIndexDBZipBundledHash = 'modDataIndexDBZipBundledHash';
-    static modDataIndexDBZipPrefix = 'modDataIndexDBZip';
-    static modDataIndexDBZipPartSize = 1024 * 1024;
+    /** Names of K entries that LoaderKeyConfig may rename at runtime. */
+    static K_RENAMABLE = ['dbName', 'storeName', 'list', 'hidden', 'readonly', 'pinned', 'bundledHash', 'prefix'] as const;
 
     override init() {
         super.init();
-        IndexDBLoader.dbName = this.loaderKeyConfig.getLoaderKey(IndexDBLoader.dbName, IndexDBLoader.dbName);
-        IndexDBLoader.storeName = this.loaderKeyConfig.getLoaderKey(IndexDBLoader.storeName, IndexDBLoader.storeName);
-        IndexDBLoader.modDataIndexDBZipListHidden = this.loaderKeyConfig.getLoaderKey(IndexDBLoader.modDataIndexDBZipListHidden, IndexDBLoader.modDataIndexDBZipListHidden);
-        IndexDBLoader.modDataIndexDBZipList = this.loaderKeyConfig.getLoaderKey(IndexDBLoader.modDataIndexDBZipList, IndexDBLoader.modDataIndexDBZipList);
-        IndexDBLoader.modDataIndexDBZipListReadonly = this.loaderKeyConfig.getLoaderKey(IndexDBLoader.modDataIndexDBZipListReadonly, IndexDBLoader.modDataIndexDBZipListReadonly);
-        IndexDBLoader.modDataIndexDBZipBundledHash = this.loaderKeyConfig.getLoaderKey(IndexDBLoader.modDataIndexDBZipBundledHash, IndexDBLoader.modDataIndexDBZipBundledHash);
-        IndexDBLoader.modDataIndexDBZipPrefix = this.loaderKeyConfig.getLoaderKey(IndexDBLoader.modDataIndexDBZipPrefix, IndexDBLoader.modDataIndexDBZipPrefix);
-
-        this.customStore = createStore(IndexDBLoader.dbName, IndexDBLoader.storeName);
+        const K = IndexDBLoader.K;
+        for (const key of IndexDBLoader.K_RENAMABLE) {
+            K[key] = this.loaderKeyConfig.getLoaderKey(String(K[key]), String(K[key]));
+        }
+        this.customStore = createStore(K.dbName, K.storeName);
     }
 
     customStore!: UseStore;
@@ -922,22 +827,21 @@ export class IndexDBLoader extends LoaderBase {
 
     async load(): Promise<boolean> {
 
-        const listFile = await keyval_get(IndexDBLoader.modDataIndexDBZipList, this.customStore);
+        const listFile = await keyval_get(IndexDBLoader.K.list, this.customStore);
         if (!listFile) {
-            return Promise.resolve(false);
+            return false;
         }
         let list: string[];
         try {
             list = JSON5.parse(listFile);
         } catch (e) {
             console.error(e);
-            return Promise.resolve(false);
+            return false;
         }
-        if (!(isArray(list) && list.every(isString))) {
-            return Promise.resolve(false);
+        if (!isStringArray(list)) {
+            return false;
         }
 
-        console.log('ModLoader ====== IndexDBLoader load() list', list);
 
         // modDataBase64ZipStringList: base64[] | Uint8Array[]
         for (const zipPath of list) {
@@ -946,28 +850,10 @@ export class IndexDBLoader extends LoaderBase {
                 console.error('ModLoader ====== IndexDBLoader load() cannot get zipPath:', zipPath);
                 continue;
             }
-            try {
-                const mpr = new ModPackFileReaderJsZipAdaptor();
-                const modPack = await mpr.loadAsync(modZipData, {base64: isString(modZipData)});
-                if (modPack) {
-                    const m = new ModZipReader(modPack, modZipData, this, this.log);
-                    if (await m.init()) {
-                        this.modList.push(m);
-                    }
-                } else {
-                    const m = await JSZip.loadAsync(modZipData, {base64: isString(modZipData)}).then(zip => {
-                        return new ModZipReader(zip, modZipData, this, this.log);
-                    });
-                    if (await m.init()) {
-                        this.modList.push(m);
-                    }
-                }
-            } catch (E) {
-                console.error(E);
-            }
+            await this.initZipReader(modZipData, isString(modZipData) ? {base64: true} : undefined);
         }
 
-        return Promise.resolve(true);
+        return true;
     }
 
     /**
@@ -975,113 +861,76 @@ export class IndexDBLoader extends LoaderBase {
      */
     static async reorderModList(modeList: string[]) {
         const oldList = await IndexDBLoader.listMod();
-        if (!oldList) {
-            console.error('ModLoader ====== IndexDBLoader reorderModList() oldList Invalid');
+        if (!oldList || oldList.length !== modeList.length || !oldList.every(T => modeList.includes(T))) {
+            console.error('ModLoader ====== IndexDBLoader reorderModList() modeList must be a permutation of the stored list');
             return;
         }
-        if (oldList.length !== modeList.length) {
-            console.error('ModLoader ====== IndexDBLoader reorderModList() oldList.length !== modeList.length');
-            return;
-        }
-        if (uniq(modeList).length !== modeList.length) {
-            console.error('ModLoader ====== IndexDBLoader reorderModList() modeList has duplicate items. invalid');
-            return;
-        }
-        if (!oldList.every((T, i) => modeList.includes(T))) {
-            console.error('ModLoader ====== IndexDBLoader reorderModList() oldList !includes() modeList');
-            return;
-        }
-        await keyval_set(IndexDBLoader.modDataIndexDBZipList, JSON.stringify(modeList), createStore(IndexDBLoader.dbName, IndexDBLoader.storeName));
-        console.log('ModLoader ====== IndexDBLoader reorderModList() done');
+        await saveStringList(IndexDBLoader.K.list, modeList);
     }
 
     static async setModList(modeList: string[]) {
-        if (!isArray(modeList) || !every(modeList, isString)) {
-            console.error('ModLoader ====== IndexDBLoader setModList() modeList type invalid. invalid');
-            return;
-        }
-        if (uniq(modeList).length !== modeList.length) {
-            console.error('ModLoader ====== IndexDBLoader setModList() modeList has duplicate items. invalid');
-            return;
-        }
-        console.log('[ModLoader] IndexDBLoader setModList() modDataIndexDBZipList', IndexDBLoader.modDataIndexDBZipList);
-        console.log('[ModLoader] IndexDBLoader setModList() dbName', IndexDBLoader.dbName);
-        console.log('[ModLoader] IndexDBLoader setModList() storeName', IndexDBLoader.storeName);
-        await keyval_set(IndexDBLoader.modDataIndexDBZipList, JSON.stringify(modeList), createStore(IndexDBLoader.dbName, IndexDBLoader.storeName));
-        console.log('ModLoader ====== IndexDBLoader setModList() done');
+        await saveStringList(IndexDBLoader.K.list, modeList);
     }
 
     static async setHiddenModList(modeList: string[]) {
-        if (!isArray(modeList) || !every(modeList, isString)) {
-            console.error('ModLoader ====== IndexDBLoader setHiddenModList() modeList type invalid. invalid');
-            return;
-        }
-        if (uniq(modeList).length !== modeList.length) {
-            console.error('ModLoader ====== IndexDBLoader setHiddenModList() modeList has duplicate items. invalid');
-            return;
-        }
-        console.log('[ModLoader] IndexDBLoader setHiddenModList() modDataIndexDBZipListHidden', IndexDBLoader.modDataIndexDBZipListHidden);
-        console.log('[ModLoader] IndexDBLoader setHiddenModList() dbName', IndexDBLoader.dbName);
-        console.log('[ModLoader] IndexDBLoader setHiddenModList() storeName', IndexDBLoader.storeName);
-        await keyval_set(IndexDBLoader.modDataIndexDBZipListHidden, JSON.stringify(modeList), createStore(IndexDBLoader.dbName, IndexDBLoader.storeName));
-        console.log('ModLoader ====== IndexDBLoader setHiddenModList() done');
+        await saveStringList(IndexDBLoader.K.hidden, modeList);
     }
 
     static async setReadonlyModList(modeList: string[]) {
-        if (!isArray(modeList) || !every(modeList, isString)) {
-            console.error('ModLoader ====== IndexDBLoader setReadonlyModList() modeList type invalid. invalid');
-            return;
-        }
-        await keyval_set(IndexDBLoader.modDataIndexDBZipListReadonly, JSON.stringify(uniq(modeList)), createStore(IndexDBLoader.dbName, IndexDBLoader.storeName));
+        await saveStringList(IndexDBLoader.K.readonly, modeList);
     }
 
     static async loadReadonlyModList() {
-        const ls = await keyval_get(IndexDBLoader.modDataIndexDBZipListReadonly, createStore(IndexDBLoader.dbName, IndexDBLoader.storeName));
-        if (!ls) return undefined;
-        try {
-            const l = JSON5.parse(ls);
-            if (Array.isArray(l) && l.every(isString)) return l;
-        } catch (e) {
-            console.error(e);
-        }
-        console.log('ModLoader ====== IndexDBLoader loadReadonlyModList() modDataIndexDBZipListReadonly Invalid');
-        return undefined;
+        return loadStringList(IndexDBLoader.K.readonly);
     }
 
-    static async loadBundledHashMap(db = createStore(IndexDBLoader.dbName, IndexDBLoader.storeName)): Promise<Record<string, string>> {
-        const value = await keyval_get(IndexDBLoader.modDataIndexDBZipBundledHash, db);
-        if (!value) return {};
-        try {
-            const record = JSON5.parse(value);
-            if (isPlainObject(record) && Object.values(record).every(isString)) {
-                return record as Record<string, string>;
-            }
-        } catch (e) {
-            console.error(e);
-        }
-        return {};
+    static async loadPinnedModList(db = createStore(IndexDBLoader.K.dbName, IndexDBLoader.K.storeName)): Promise<string[] | undefined> {
+        return loadStringList(IndexDBLoader.K.pinned, db);
+    }
+
+    static async setPinnedModList(modeList: string[], db = createStore(IndexDBLoader.K.dbName, IndexDBLoader.K.storeName)) {
+        await saveStringList(IndexDBLoader.K.pinned, modeList, db);
+    }
+
+    static async addPinnedMod(name: string, db = createStore(IndexDBLoader.K.dbName, IndexDBLoader.K.storeName)) {
+        const pinnedList = await this.loadPinnedModList(db) || [];
+        if (!pinnedList.includes(name)) await this.setPinnedModList([...pinnedList, name], db);
+    }
+
+    static async removePinnedMod(name: string, db = createStore(IndexDBLoader.K.dbName, IndexDBLoader.K.storeName)) {
+        const pinnedList = await this.loadPinnedModList(db) || [];
+        await this.setPinnedModList(pinnedList.filter(T => T !== name), db);
+    }
+
+    static async isPinnedMod(name: string, db = createStore(IndexDBLoader.K.dbName, IndexDBLoader.K.storeName)): Promise<boolean> {
+        return (await this.loadPinnedModList(db) || []).includes(name);
+    }
+
+    static async loadBundledHashMap(db = createStore(IndexDBLoader.K.dbName, IndexDBLoader.K.storeName)): Promise<Record<string, string>> {
+        return loadStringRecord(IndexDBLoader.K.bundledHash, db);
     }
 
     static async syncBundledModList() {
         const bundledList = (window as any).modDataValueZipListIndexDB;
         if (!bundledList) return;
-        if (!isArray(bundledList)) {
+        if (!Array.isArray(bundledList)) {
             console.error('ModLoader ====== IndexDBLoader syncBundledModList() bundledList invalid.');
             return;
         }
         try {
-            const db = createStore(IndexDBLoader.dbName, IndexDBLoader.storeName);
+            const db = createStore(IndexDBLoader.K.dbName, IndexDBLoader.K.storeName);
             const enabledSet = new Set(await this.listMod() || []);
             const hiddenSet = new Set(await this.loadHiddenModList() || []);
             const readonlySet = new Set<string>();
             const hashMap = await this.loadBundledHashMap(db);
             const currentBundledSet = new Set<string>();
+            const pinnedSet = new Set(await this.loadPinnedModList(db) || []);
 
             for (const item of bundledList) {
                 const bundledItem = isString(item) ? undefined : item as IndexDBBundledModItem;
                 const data = isString(item) ? item : bundledItem?.data;
                 const maybeDataParts = bundledItem?.dataParts;
-                const dataParts = isArray(maybeDataParts) && every(maybeDataParts, isString) ? maybeDataParts : undefined;
+                const dataParts = isStringArray(maybeDataParts) ? maybeDataParts : undefined;
                 if (!isString(data) && !dataParts) {
                     console.error('ModLoader ====== IndexDBLoader syncBundledModList() item data invalid.', item);
                     continue;
@@ -1093,7 +942,7 @@ export class IndexDBLoader extends LoaderBase {
                 const hash = isString(maybeHash) ? maybeHash : '';
                 if (isBuiltin && itemName) currentBundledSet.add(itemName);
 
-                if (itemName && hash && hashMap[itemName] === hash) {
+                if (itemName && hash && (hashMap[itemName] === hash || pinnedSet.has(itemName))) {
                     readonlySet.add(itemName);
                     if (await this.getModData(itemName, db)) {
                         if (!enabledSet.has(itemName) && !hiddenSet.has(itemName)) enabledSet.add(itemName);
@@ -1144,6 +993,7 @@ export class IndexDBLoader extends LoaderBase {
 
             for (const name of Object.keys(hashMap)) {
                 if (currentBundledSet.has(name)) continue;
+                if (pinnedSet.has(name)) continue;
                 enabledSet.delete(name);
                 hiddenSet.delete(name);
                 readonlySet.delete(name);
@@ -1151,10 +1001,10 @@ export class IndexDBLoader extends LoaderBase {
                 delete hashMap[name];
             }
 
-            await keyval_set(IndexDBLoader.modDataIndexDBZipList, JSON.stringify(Array.from(enabledSet)), db);
-            await keyval_set(IndexDBLoader.modDataIndexDBZipListHidden, JSON.stringify(Array.from(hiddenSet)), db);
-            await keyval_set(IndexDBLoader.modDataIndexDBZipListReadonly, JSON.stringify(Array.from(readonlySet)), db);
-            await keyval_set(IndexDBLoader.modDataIndexDBZipBundledHash, JSON.stringify(hashMap), db);
+            await keyval_set(IndexDBLoader.K.list, JSON.stringify(Array.from(enabledSet)), db);
+            await keyval_set(IndexDBLoader.K.hidden, JSON.stringify(Array.from(hiddenSet)), db);
+            await keyval_set(IndexDBLoader.K.readonly, JSON.stringify(Array.from(readonlySet)), db);
+            await keyval_set(IndexDBLoader.K.bundledHash, JSON.stringify(hashMap), db);
         } finally {
             delete (window as any).modDataValueZipListIndexDB;
             await new Promise(resolve => setTimeout(resolve, 0));
@@ -1162,51 +1012,15 @@ export class IndexDBLoader extends LoaderBase {
     }
 
     static async loadHiddenModList() {
-        console.log('[ModLoader] IndexDBLoader loadHiddenModList() modDataIndexDBZipListHidden', IndexDBLoader.modDataIndexDBZipListHidden);
-        console.log('[ModLoader] IndexDBLoader loadHiddenModList() dbName', IndexDBLoader.dbName);
-        console.log('[ModLoader] IndexDBLoader loadHiddenModList() storeName', IndexDBLoader.storeName);
-        const ls = await keyval_get(IndexDBLoader.modDataIndexDBZipListHidden, createStore(IndexDBLoader.dbName, IndexDBLoader.storeName));
-        if (!ls) {
-            console.log('ModLoader ====== IndexDBLoader loadHiddenModList() cannot find modDataIndexDBZipListHidden');
-            return undefined;
-        }
-        try {
-            const l = JSON5.parse(ls);
-            console.log('ModLoader ====== IndexDBLoader loadHiddenModList() modDataIndexDBZipListHidden', l);
-            if (Array.isArray(l) && l.every(isString)) {
-                return l;
-            }
-        } catch (e) {
-            console.error(e);
-        }
-        console.log('ModLoader ====== IndexDBLoader loadHiddenModList() modDataIndexDBZipListHidden Invalid');
-        return undefined;
+        return loadStringList(IndexDBLoader.K.hidden);
     }
 
     static async listMod() {
-        console.log('[ModLoader] IndexDBLoader listMod() modDataIndexDBZipList', IndexDBLoader.modDataIndexDBZipList);
-        console.log('[ModLoader] IndexDBLoader listMod() dbName', IndexDBLoader.dbName);
-        console.log('[ModLoader] IndexDBLoader listMod() storeName', IndexDBLoader.storeName);
-        const ls = await keyval_get(IndexDBLoader.modDataIndexDBZipList, createStore(IndexDBLoader.dbName, IndexDBLoader.storeName));
-        if (!ls) {
-            console.log('ModLoader ====== IndexDBLoader listMod() cannot find modDataIndexDBZipList');
-            return undefined;
-        }
-        try {
-            const l = JSON5.parse(ls);
-            console.log('ModLoader ====== IndexDBLoader listMod() modDataIndexDBZipList', l);
-            if (Array.isArray(l) && l.every(isString)) {
-                return l;
-            }
-        } catch (e) {
-            console.error(e);
-        }
-        console.log('ModLoader ====== IndexDBLoader listMod() modDataIndexDBZipList Invalid');
-        return undefined;
+        return loadStringList(IndexDBLoader.K.list);
     }
 
     static calcModNameKey(name: string) {
-        return `${this.modDataIndexDBZipPrefix}:${name}`;
+        return `${IndexDBLoader.K.prefix}:${name}`;
     }
 
     static calcModPartKey(name: string, partKey: string, index: number) {
@@ -1218,7 +1032,7 @@ export class IndexDBLoader extends LoaderBase {
     }
 
     static getModPartSize(byteLength: number) {
-        const baseSize = this.modDataIndexDBZipPartSize;
+        const baseSize = IndexDBLoader.K.partSize;
         if (byteLength <= baseSize) {
             return baseSize;
         }
@@ -1228,7 +1042,7 @@ export class IndexDBLoader extends LoaderBase {
     }
 
     static isModPartsRecord(value: any): value is IndexDBModPartsRecord {
-        return isArray(value)
+        return Array.isArray(value)
             && value.length === 4
             && typeof value[0] === 'number'
             && typeof value[1] === 'number'
@@ -1236,23 +1050,24 @@ export class IndexDBLoader extends LoaderBase {
             && isString(value[3]);
     }
 
-    static async deleteModParts(name: string, record: IndexDBModPartsRecord, db = createStore(IndexDBLoader.dbName, IndexDBLoader.storeName)) {
+    static async deleteModParts(name: string, record: IndexDBModPartsRecord, db = createStore(IndexDBLoader.K.dbName, IndexDBLoader.K.storeName)) {
         const [, partCount, , partKey] = record;
-        for (let i = 0; i < partCount; i++) {
-            await keyval_del(this.calcModPartKey(name, partKey, i), db);
-        }
+        const partKeys = Array.from({ length: partCount }, (_, i) => this.calcModPartKey(name, partKey, i));
+        await Promise.all(partKeys.map(partKeyName => keyval_del(partKeyName, db)));
     }
 
-    static async getModData(name: string, db = createStore(IndexDBLoader.dbName, IndexDBLoader.storeName)): Promise<ModZipData | undefined> {
+    static async getModData(name: string, db = createStore(IndexDBLoader.K.dbName, IndexDBLoader.K.storeName)): Promise<ModZipData | undefined> {
         const value = await keyval_get(this.calcModNameKey(name), db);
         if (!this.isModPartsRecord(value)) {
             return value;
         }
         const [, partCount, byteLength, partKey] = value;
+        const partKeys = Array.from({ length: partCount }, (_, i) => this.calcModPartKey(name, partKey, i));
+        const parts = await Promise.all(partKeys.map(partKeyName => keyval_get(partKeyName, db)));
         const result = new Uint8Array(byteLength);
         let offset = 0;
-        for (let i = 0; i < partCount; i++) {
-            const part = await keyval_get(this.calcModPartKey(name, partKey, i), db);
+        for (let i = 0; i < parts.length; i++) {
+            const part = parts[i];
             if (!(part instanceof Uint8Array)) {
                 console.error('ModLoader ====== IndexDBLoader getModData() part invalid:', [name, i]);
                 return undefined;
@@ -1263,7 +1078,7 @@ export class IndexDBLoader extends LoaderBase {
         return result;
     }
 
-    static async setModData(name: string, modData: ModZipData, db = createStore(IndexDBLoader.dbName, IndexDBLoader.storeName)) {
+    static async setModData(name: string, modData: ModZipData, db = createStore(IndexDBLoader.K.dbName, IndexDBLoader.K.storeName)) {
         const k = this.calcModNameKey(name);
         const oldValue = await keyval_get(k, db);
         const modBin = isString(modData) ? base64ToUint8Array(modData) : modData;
@@ -1277,11 +1092,13 @@ export class IndexDBLoader extends LoaderBase {
         }
         const partCount = Math.ceil(modBin.length / partSize);
         const partKey = this.makeModPartKey();
+        const partWrites: [string, Uint8Array][] = [];
         for (let i = 0; i < partCount; i++) {
             const start = i * partSize;
             const end = Math.min(start + partSize, modBin.length);
-            await keyval_set(this.calcModPartKey(name, partKey, i), modBin.slice(start, end), db);
+            partWrites.push([this.calcModPartKey(name, partKey, i), modBin.slice(start, end)]);
         }
+        await Promise.all(partWrites.map(([key, part]) => keyval_set(key, part, db)));
         const record: IndexDBModPartsRecord = [partSize, partCount, modBin.length, partKey];
         await keyval_set(k, record, db);
         if (this.isModPartsRecord(oldValue)) {
@@ -1289,7 +1106,7 @@ export class IndexDBLoader extends LoaderBase {
         }
     }
 
-    static async modDataFromBase64Parts(name: string, dataParts: string[], db = createStore(IndexDBLoader.dbName, IndexDBLoader.storeName)) {
+    static async modDataFromBase64Parts(name: string, dataParts: string[], db = createStore(IndexDBLoader.K.dbName, IndexDBLoader.K.storeName)) {
         const k = this.calcModNameKey(name);
         const oldValue = await keyval_get(k, db);
         if (dataParts.length === 1) {
@@ -1302,12 +1119,14 @@ export class IndexDBLoader extends LoaderBase {
         const partKey = this.makeModPartKey();
         let byteLength = 0;
         let firstPartLength = 0;
+        const partWrites: [string, Uint8Array][] = [];
         for (let i = 0; i < dataParts.length; i++) {
             const part = base64ToUint8Array(dataParts[i]);
             if (i === 0) firstPartLength = part.length;
             byteLength += part.length;
-            await keyval_set(this.calcModPartKey(name, partKey, i), part, db);
+            partWrites.push([this.calcModPartKey(name, partKey, i), part]);
         }
+        await Promise.all(partWrites.map(([key, part]) => keyval_set(key, part, db)));
         const record: IndexDBModPartsRecord = [firstPartLength, dataParts.length, byteLength, partKey];
         await keyval_set(k, record, db);
         if (this.isModPartsRecord(oldValue)) {
@@ -1315,7 +1134,7 @@ export class IndexDBLoader extends LoaderBase {
         }
     }
 
-    static async delModData(name: string, db = createStore(IndexDBLoader.dbName, IndexDBLoader.storeName)) {
+    static async delModData(name: string, db = createStore(IndexDBLoader.K.dbName, IndexDBLoader.K.storeName)) {
         const k = this.calcModNameKey(name);
         const oldValue = await keyval_get(k, db);
         if (this.isModPartsRecord(oldValue)) {
@@ -1325,13 +1144,31 @@ export class IndexDBLoader extends LoaderBase {
     }
 
     static async addMod(name: string, modBase64String: string | Uint8Array) {
-        let l = new Set(await this.listMod() || []);
+        const l = new Set(await this.listMod() || []);
         l.add(name);
-        const db = createStore(IndexDBLoader.dbName, IndexDBLoader.storeName);
+        const db = createStore(IndexDBLoader.K.dbName, IndexDBLoader.K.storeName);
         await this.setModData(name, modBase64String, db);
-        await keyval_set(this.modDataIndexDBZipList, JSON.stringify(Array.from(l)), db);
-        // await keyval_set(k, modBase64String, db);
-        // await keyval_set(this.modDataIndexDBZipList, JSON.stringify(Array.from(l)), db);
+        await keyval_set(IndexDBLoader.K.list, JSON.stringify(Array.from(l)), db);
+        // importing over a bundled (readonly / hash-tracked) mod pins the user's override so
+        // syncBundledModList keeps it instead of reverting to the embedded default on next boot.
+        const readonlyList = await this.loadReadonlyModList() || [];
+        const bundledHash = await this.loadBundledHashMap(db);
+        if (readonlyList.includes(name) || bundledHash[name]) {
+            await this.addPinnedMod(name, db);
+        }
+    }
+
+    // Drop a user's imported override of a bundled mod: unpin, delete data and the stored
+    // bundled hash so the next syncBundledModList re-imports the embedded default version.
+    static async resetBundledModToDefault(name: string) {
+        const db = createStore(IndexDBLoader.K.dbName, IndexDBLoader.K.storeName);
+        await this.removePinnedMod(name, db);
+        await this.delModData(name, db);
+        const hashMap = await this.loadBundledHashMap(db);
+        if (hashMap[name]) {
+            delete hashMap[name];
+            await keyval_set(IndexDBLoader.K.bundledHash, JSON.stringify(hashMap), db);
+        }
     }
 
     static async removeMod(name: string) {
@@ -1343,39 +1180,15 @@ export class IndexDBLoader extends LoaderBase {
         l = l.filter(T => T !== name);
         let lH = await this.loadHiddenModList() || [];
         lH = lH.filter(T => T !== name);
-        const db = createStore(IndexDBLoader.dbName, IndexDBLoader.storeName);
-        await keyval_set(this.modDataIndexDBZipList, JSON.stringify(l), db);
-        await keyval_set(this.modDataIndexDBZipListHidden, JSON.stringify(lH), db);
+        const db = createStore(IndexDBLoader.K.dbName, IndexDBLoader.K.storeName);
+        await keyval_set(IndexDBLoader.K.list, JSON.stringify(l), db);
+        await keyval_set(IndexDBLoader.K.hidden, JSON.stringify(lH), db);
         await this.delModData(name, db);
         return true;
     }
 
-    // get bootJson from zip
-    static async checkModZipFile(modBase64String: string | Uint8Array) {
-        try {
-            const mpr = new ModPackFileReaderJsZipAdaptor();
-            const modPack = await mpr.loadAsync(modBase64String, {base64: isString(modBase64String)});
-            let zip: JSZipLikeReadOnlyInterface;
-            if (modPack) {
-                zip = modPack;
-            } else {
-                zip = await JSZip.loadAsync(modBase64String, {base64: isString(modBase64String)});
-            }
-            const bootJsonFile = zip.file(ModZipReader.modBootFilePath);
-            if (!bootJsonFile) {
-                console.log('ModLoader ====== IndexDBLoader checkModeZipFile() cannot find bootJsonFile:', ModZipReader.modBootFilePath);
-                return `bootJsonFile ${ModZipReader.modBootFilePath} Invalid`;
-            }
-            const bootJson = await bootJsonFile.async('string');
-            const bootJ = JSON5.parse(bootJson);
-            if (ModZipReader.validateBootJson(bootJ)) {
-                return bootJ;
-            }
-            return `bootJson Invalid`;
-        } catch (E: any) {
-            console.error('checkModZipFile', E);
-            return Promise.reject(E);
-        }
+    static async checkModZipFile(modData: ModZipData) {
+        return modBootJson(modData);
     }
 
     setConfigKey(
@@ -1384,10 +1197,10 @@ export class IndexDBLoader extends LoaderBase {
         modDataIndexDBZipList?: string,
         modDataIndexDBZipListHidden?: string,
     ) {
-        IndexDBLoader.dbName = dbName ?? IndexDBLoader.dbName;
-        IndexDBLoader.storeName = storeName ?? IndexDBLoader.storeName;
-        IndexDBLoader.modDataIndexDBZipList = modDataIndexDBZipList ?? IndexDBLoader.modDataIndexDBZipList;
-        IndexDBLoader.modDataIndexDBZipListHidden = modDataIndexDBZipListHidden ?? IndexDBLoader.modDataIndexDBZipListHidden;
+        IndexDBLoader.K.dbName = dbName ?? IndexDBLoader.K.dbName;
+        IndexDBLoader.K.storeName = storeName ?? IndexDBLoader.K.storeName;
+        IndexDBLoader.K.list = modDataIndexDBZipList ?? IndexDBLoader.K.list;
+        IndexDBLoader.K.hidden = modDataIndexDBZipListHidden ?? IndexDBLoader.K.hidden;
     }
 
 }
@@ -1407,28 +1220,10 @@ export class Base64ZipStringLoader extends LoaderBase {
 
         // modDataBase64ZipStringList: base64[]
         for (const base64ZipString of this.base64ZipStringList) {
-            try {
-                const mpr = new ModPackFileReaderJsZipAdaptor();
-                const modPack = await mpr.loadAsync(base64ZipString, {base64: true});
-                if (modPack) {
-                    const m = new ModZipReader(modPack, '', this, this.log);
-                    if (await m.init()) {
-                        this.modList.push(m);
-                    }
-                } else {
-                    const m = await JSZip.loadAsync(base64ZipString, {base64: true}).then(zip => {
-                        return new ModZipReader(zip, base64ZipString, this, this.log);
-                    });
-                    if (await m.init()) {
-                        this.modList.push(m);
-                    }
-                }
-            } catch (E) {
-                console.error(E);
-            }
+            await this.initZipReader(base64ZipString, {base64: true});
         }
 
-        return Promise.resolve(true);
+        return true;
     }
 
 }
@@ -1452,42 +1247,19 @@ export class LocalLoader extends LoaderBase {
 
     async load(): Promise<boolean> {
         if ((this.thisWin as any)[this.modDataValueZipListPath]) {
-            console.log('ModLoader ====== LocalLoader load() DataValueZip', [(this.thisWin as any)[this.modDataValueZipListPath]]);
 
             const modDataValueZipList: undefined | string[] = (this.thisWin as any)[this.modDataValueZipListPath];
-            if (modDataValueZipList && isArray(modDataValueZipList) && modDataValueZipList.every(isString)) {
+            if (isStringArray(modDataValueZipList)) {
 
                 // modDataValueZipList: base64[]
                 for (const modDataValueZip of modDataValueZipList) {
-                    try {
-                        const mpr = new ModPackFileReaderJsZipAdaptor();
-                        // console.log('ModPackFileReaderJsZipAdaptor', mpr);
-                        const modPack = await mpr.loadAsync(modDataValueZip, {base64: true});
-                        // console.log('ModLoader ====== LocalLoader load() modDataValueZip', [/*modDataValueZip*/, modPack]);
-                        if (modPack) {
-                            const m = new ModZipReader(modPack, '', this, this.log);
-                            // console.log('modDataValueZip boot', await m.zip.file('boot.json')?.async('string'));
-                            if (await m.init()) {
-                                // console.log('modDataValueZip m', m);
-                                this.modList.push(m);
-                            }
-                        } else {
-                            const m = await JSZip.loadAsync(modDataValueZip, {base64: true}).then(zip => {
-                                return new ModZipReader(zip, modDataValueZip, this, this.log);
-                            });
-                            if (await m.init()) {
-                                this.modList.push(m);
-                            }
-                        }
-                    } catch (E) {
-                        console.error(E);
-                    }
+                    await this.initZipReader(modDataValueZip, {base64: true});
                 }
 
-                return Promise.resolve(true);
+                return true;
             }
         }
-        return Promise.resolve(false);
+        return false;
     }
 
     setConfigKey(modDataValueZipListPath?: string) {
@@ -1512,37 +1284,21 @@ export class RemoteLoader extends LoaderBase {
         });
         console.log('ModLoader ====== RemoteLoader load() modList', modList);
 
-        if (modList && isArray(modList) && modList.every(isString)) {
+        if (isStringArray(modList)) {
 
             // modList: filePath[]
             for (const modFileZipPath of modList) {
                 try {
-                    const m = await fetch(modFileZipPath)
-                        .then(async (T) => {
-                            const blob = await T.blob();
-
-                            const mpr = new ModPackFileReaderJsZipAdaptor();
-                            const modPack = await mpr.loadAsync(blob);
-                            if (modPack) {
-                                const zipFile = new ModZipReader(modPack, '', this, this.log);
-                                return zipFile;
-                            } else {
-                                const base64ZipString = await blobToBase64(blob);
-                                const zipFile = await JSZip.loadAsync(blob);
-                                return new ModZipReader(zipFile, base64ZipString, this, this.log);
-                            }
-                        });
-                    if (await m.init()) {
-                        this.modList.push(m);
-                    }
+                    const blob = await fetch(modFileZipPath).then(T => T.blob());
+                    await this.initZipReader(blob);
                 } catch (E) {
                     console.error(E);
                 }
             }
 
-            return Promise.resolve(true);
+            return true;
         }
-        return Promise.resolve(false);
+        return false;
     }
 
     setConfigKey(modDataRemoteListPath: string) {
@@ -1571,12 +1327,12 @@ export class LazyLoader extends LoaderBase {
         } catch (E: Error | any) {
             console.error('LazyLoader add()', E);
             this.log.logError(`LazyLoader add() [${E?.message ? E.message : E}]`);
-            return Promise.reject(E);
+            throw E;
         }
     }
 
     async load(): Promise<boolean> {
-        return Promise.resolve(true);
+        return true;
     }
 
 }
@@ -1584,10 +1340,10 @@ export class LazyLoader extends LoaderBase {
 export const getModZipReaderStaticClassRef = () => {
     console.error('WARNING: the [[[getModZipReaderStaticClassRef]]] will delete later.');
     return {
-        LocalStorageLoader: LocalStorageLoader,
-        IndexDBLoader: IndexDBLoader,
-        LocalLoader: LocalLoader,
-        RemoteLoader: RemoteLoader,
+        LocalStorageLoader,
+        IndexDBLoader,
+        LocalLoader,
+        RemoteLoader,
     };
 };
 
@@ -1615,17 +1371,10 @@ export class LoaderKeyConfig {
 
     config: Map<string, string> = new Map<string, string>();
 
-    getLoaderKey(k: string, d: string) {
+    getLoaderKey(key: string, fallback: string) {
         this.init();
-        const n = this.config.get(k);
-        console.log('LoaderKeyConfig getLoaderKey state:', k, d, n);
-        if (isString(n) && n.length > 1) {
-            console.log('LoaderKeyConfig getLoaderKey return:', k, n);
-            return n;
-        } else {
-            console.log('LoaderKeyConfig getLoaderKey return:', k, d);
-            return d;
-        }
+        const value = this.config.get(key);
+        return value && value.length > 0 ? value : fallback;
     }
 
     protected isInit = false;
@@ -1635,13 +1384,11 @@ export class LoaderKeyConfig {
             return;
         }
         this.isInit = true;
-        console.log('LoaderKeyConfig init.');
         this.callWinHookFunction();
         this.getConfigFromUrlHash();
         if (this.config.size > 0) {
             this.logger.log(`LoaderKeyConfig init() config:[${[...this.config.entries()]}]`);
         }
-        console.log('LoaderKeyConfig init end', this.config);
     }
 
     /**
@@ -1659,7 +1406,6 @@ export class LoaderKeyConfig {
         try {
             if ((window as any)[this.modLoaderKeyConfigWinHookFunctionName]) {
                 (window as any)[this.modLoaderKeyConfigWinHookFunctionName](this);
-                console.log('LoaderKeyConfig callWinHookFunction called', this.config);
             }
         } catch (e) {
             console.error('LoaderKeyConfig callWinHookFunction Error', e);
@@ -1672,12 +1418,8 @@ export class LoaderKeyConfig {
      * @protected
      */
     protected getConfigFromUrlHash() {
-        const search = window.location.search;
-        if (search.length > 1) {
-            const a = search.slice(1).split('&').map(T => T.split('='));
-            for (const [k, v] of a) {
-                this.config.set(k, v);
-            }
+        for (const [key, value] of new URLSearchParams(window.location.search)) {
+            this.config.set(key, value);
         }
     }
 

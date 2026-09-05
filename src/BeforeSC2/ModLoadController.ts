@@ -355,12 +355,12 @@ export class ModLoadController implements ModLoadControllerCallback {
         this.lifeTimeCircleHookTable.clear();
     }
 
-    public listModLocalStorage() {
-        return LocalStorageLoader.listMod() || [];
-    }
-
     public addModLocalStorage(name: string, modBase64String: string) {
         return LocalStorageLoader.addMod(name, modBase64String);
+    }
+
+    public listModLocalStorage() {
+        return LocalStorageLoader.listMod() || [];
     }
 
     public removeModLocalStorage(name: string) {
