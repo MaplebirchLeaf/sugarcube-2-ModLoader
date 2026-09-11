@@ -16,6 +16,39 @@ const isStringArray = (value: unknown): value is string[] => Array.isArray(value
 const isPlainObject = (value: unknown): value is Record<string, unknown> =>
     typeof value === 'object' && value !== null && !Array.isArray(value);
 const hasOwn = (value: object, key: PropertyKey) => Object.prototype.hasOwnProperty.call(value, key);
+
+interface RuntimeCapacity {
+    modPrefetch: number;
+    fileReads: number;
+}
+
+function runtimeCapacity(): RuntimeCapacity {
+    const runtimeNavigator = typeof navigator === 'undefined'
+        ? undefined
+        : navigator as Navigator & {deviceMemory?: number};
+    const cores = runtimeNavigator?.hardwareConcurrency || 2;
+    const memory = Number(runtimeNavigator?.deviceMemory || 0);
+    if (cores <= 4 || (memory > 0 && memory <= 4)) return {modPrefetch: 1, fileReads: 2};
+    if (cores >= 12 && (memory === 0 || memory >= 8)) return {modPrefetch: 2, fileReads: 6};
+    return {modPrefetch: 2, fileReads: 3};
+}
+
+async function mapLimited<T, R>(items: readonly T[], concurrency: number, task: (item: T) => Promise<R>): Promise<R[]> {
+    const results = new Array<R>(items.length);
+    let next = 0;
+    async function worker(): Promise<void> {
+        while (next < items.length) {
+            const index = next++;
+            results[index] = await task(items[index]);
+        }
+    }
+    await Promise.all(Array.from({length: Math.min(concurrency, items.length)}, () => worker()));
+    return results;
+}
+
+function yieldToMainThread(): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, 0));
+}
 // import moment from "moment";
 
 let xxHashApi: Awaited<ReturnType<typeof xxHash>> | undefined;
@@ -411,9 +444,11 @@ export class ModZipReader {
         target: Array<[string, string]>,
         kind: string,
     ) {
-        for (const path of paths ?? []) {
-            const data = await this.readTextFile(path, kind);
-            if (data !== undefined) target.push([path, data]);
+        const filePaths = paths ?? [];
+        const contents = await mapLimited(filePaths, runtimeCapacity().fileReads, path => this.readTextFile(path, kind));
+        for (let index = 0; index < filePaths.length; index++) {
+            const data = contents[index];
+            if (data !== undefined) target.push([filePaths[index], data]);
         }
     }
 
@@ -844,13 +879,23 @@ export class IndexDBLoader extends LoaderBase {
 
 
         // modDataBase64ZipStringList: base64[] | Uint8Array[]
-        for (const zipPath of list) {
-            const modZipData = await IndexDBLoader.getModData(zipPath, this.customStore);
+        const capacity = runtimeCapacity().modPrefetch;
+        const pending = new Map<number, Promise<ModZipData | undefined>>();
+        const schedule = (index: number) => {
+            if (index < list.length) pending.set(index, IndexDBLoader.getModData(list[index], this.customStore));
+        };
+        for (let index = 0; index < capacity; index++) schedule(index);
+        for (let index = 0; index < list.length; index++) {
+            const zipPath = list[index];
+            const modZipData = await pending.get(index);
+            pending.delete(index);
             if (!modZipData) {
                 console.error('ModLoader ====== IndexDBLoader load() cannot get zipPath:', zipPath);
-                continue;
+            } else {
+                await this.initZipReader(modZipData, isString(modZipData) ? {base64: true} : undefined);
             }
-            await this.initZipReader(modZipData, isString(modZipData) ? {base64: true} : undefined);
+            schedule(index + capacity);
+            await yieldToMainThread();
         }
 
         return true;
